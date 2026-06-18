@@ -121,6 +121,15 @@
             </div>
             <p class="progress-text">{{ completedTasks }} / {{ totalTasks }} 任务完成</p>
           </div>
+
+          <div class="info-item document-library">
+            <label>文档库</label>
+            <div class="document-dropzone" aria-disabled="true">
+              <strong>上传文档后续支持</strong>
+              <p>当前阶段仅预留 RAG 入口，研究流程会先跳过文档库检索。</p>
+              <button type="button" disabled>上传文档</button>
+            </div>
+          </div>
         </div>
 
         <div class="sidebar-actions">
@@ -165,6 +174,30 @@
           </transition-group>
         </div>
 
+        <div class="result-workbench">
+          <section class="workflow-panel">
+            <div class="workflow-panel-header">
+              <div>
+                <h3>LangGraph 节点进度</h3>
+                <p>{{ completedWorkflowNodes }} / {{ workflowNodes.length || defaultWorkflowNodes.length }} 节点完成</p>
+              </div>
+            </div>
+            <ul class="workflow-list">
+              <li
+                v-for="node in visibleWorkflowNodes"
+                :key="node.node"
+                :class="['workflow-node-item', node.status]"
+              >
+                <span class="workflow-node-dot"></span>
+                <div>
+                  <strong>{{ node.label }}</strong>
+                  <p>{{ node.detail || formatWorkflowStatus(node.status) }}</p>
+                </div>
+              </li>
+            </ul>
+          </section>
+
+          <div class="content-column">
         <div class="tasks-section" v-if="todoTasks.length">
           <aside class="tasks-list">
             <h3>任务清单</h3>
@@ -329,6 +362,8 @@
           <h3>最终报告</h3>
           <pre class="block-pre">{{ reportMarkdown }}</pre>
         </div>
+          </div>
+        </div>
       </section>
 
     </div>
@@ -376,6 +411,14 @@ interface TodoTaskView {
   toolCalls: ToolCallLog[];
 }
 
+interface WorkflowNodeView {
+  node: string;
+  label: string;
+  status: string;
+  detail: string;
+  taskId: number | null;
+}
+
 const form = reactive({
   topic: "",
   searchApi: ""
@@ -390,6 +433,7 @@ const isExpanded = ref(false);
 const todoTasks = ref<TodoTaskView[]>([]);
 const activeTaskId = ref<number | null>(null);
 const reportMarkdown = ref("");
+const workflowNodes = ref<WorkflowNodeView[]>([]);
 
 const summaryHighlight = ref(false);
 const sourcesHighlight = ref(false);
@@ -413,13 +457,42 @@ const TASK_STATUS_LABEL: Record<string, string> = {
   skipped: "已跳过"
 };
 
+const WORKFLOW_STATUS_LABEL: Record<string, string> = {
+  pending: "等待中",
+  in_progress: "执行中",
+  completed: "已完成",
+  skipped: "已跳过",
+  failed: "失败"
+};
+
+const defaultWorkflowNodes: WorkflowNodeView[] = [
+  { node: "plan_tasks", label: "规划研究任务", status: "pending", detail: "", taskId: null },
+  { node: "retrieve_documents", label: "检索文档库", status: "pending", detail: "", taskId: null },
+  { node: "search_web", label: "搜索网页资料", status: "pending", detail: "", taskId: null },
+  { node: "summarize_task", label: "总结任务发现", status: "pending", detail: "", taskId: null },
+  { node: "write_report", label: "撰写最终报告", status: "pending", detail: "", taskId: null }
+];
+
 function formatTaskStatus(status: string): string {
   return TASK_STATUS_LABEL[status] ?? status;
+}
+
+function formatWorkflowStatus(status: string): string {
+  return WORKFLOW_STATUS_LABEL[status] ?? status;
 }
 
 const totalTasks = computed(() => todoTasks.value.length);
 const completedTasks = computed(() =>
   todoTasks.value.filter((task) => task.status === "completed").length
+);
+const visibleWorkflowNodes = computed(() =>
+  workflowNodes.value.length ? workflowNodes.value : defaultWorkflowNodes
+);
+const completedWorkflowNodes = computed(
+  () =>
+    visibleWorkflowNodes.value.filter((node) =>
+      ["completed", "skipped"].includes(node.status)
+    ).length
 );
 
 const currentTask = computed(() => {
@@ -635,6 +708,7 @@ function resetWorkflowState() {
   todoTasks.value = [];
   activeTaskId.value = null;
   reportMarkdown.value = "";
+  workflowNodes.value = [];
   progressLogs.value = [];
   summaryHighlight.value = false;
   sourcesHighlight.value = false;
@@ -665,6 +739,40 @@ function upsertTaskMetadata(task: TodoTaskView, payload: Record<string, unknown>
   }
   if (typeof payload.query === "string" && payload.query.trim()) {
     task.query = payload.query.trim();
+  }
+}
+
+function upsertWorkflowNode(payload: Record<string, unknown>) {
+  const node = extractOptionalString(payload.node);
+  if (!node) {
+    return;
+  }
+  const label = extractOptionalString(payload.label) ?? node;
+  const status = extractOptionalString(payload.status) ?? "pending";
+  const detail = extractOptionalString(payload.detail) ?? "";
+  const rawTaskId = payload.task_id;
+  const taskId =
+    typeof rawTaskId === "number"
+      ? rawTaskId
+      : typeof rawTaskId === "string"
+      ? Number(rawTaskId)
+      : null;
+  const normalizedTaskId =
+    typeof taskId === "number" && Number.isFinite(taskId) ? taskId : null;
+  const existing = workflowNodes.value.find((item) => item.node === node);
+  if (existing) {
+    existing.label = label;
+    existing.status = status;
+    existing.detail = detail;
+    existing.taskId = normalizedTaskId;
+  } else {
+    workflowNodes.value.push({
+      node,
+      label,
+      status,
+      detail,
+      taskId: normalizedTaskId
+    });
   }
 }
 
@@ -708,6 +816,20 @@ const handleSubmit = async () => {
           if (task && message) {
             task.notices.push(message);
             applyNoteMetadata(task, payload);
+          }
+          return;
+        }
+
+        if (event.type === "workflow_node") {
+          const payload = event as Record<string, unknown>;
+          upsertWorkflowNode(payload);
+          const label = extractOptionalString(payload.label) ?? "工作流节点";
+          const status = extractOptionalString(payload.status) ?? "";
+          const detail = extractOptionalString(payload.detail);
+          if (status === "in_progress") {
+            progressLogs.value.push(`${label}开始`);
+          } else if (detail) {
+            progressLogs.value.push(`${label}：${detail}`);
           }
           return;
         }
@@ -1433,6 +1555,109 @@ select:focus {
   transform: translateY(-6px);
 }
 
+.result-workbench {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.workflow-panel,
+.content-column {
+  min-width: 0;
+}
+
+.workflow-panel {
+  position: sticky;
+  top: 0;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 18px;
+  padding: 18px;
+  box-shadow: inset 0 0 0 1px rgba(226, 232, 240, 0.4);
+}
+
+.workflow-panel-header h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #1f2937;
+}
+
+.workflow-panel-header p {
+  margin: 6px 0 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.workflow-list {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.workflow-node-item {
+  display: grid;
+  grid-template-columns: 12px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(248, 250, 252, 0.78);
+}
+
+.workflow-node-dot {
+  width: 10px;
+  height: 10px;
+  margin-top: 4px;
+  border-radius: 999px;
+  background: #94a3b8;
+}
+
+.workflow-node-item strong {
+  display: block;
+  color: #1f2937;
+  font-size: 13px;
+}
+
+.workflow-node-item p {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.workflow-node-item.in_progress {
+  border-color: rgba(99, 102, 241, 0.4);
+  background: rgba(224, 231, 255, 0.55);
+}
+
+.workflow-node-item.in_progress .workflow-node-dot {
+  background: #6366f1;
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.18);
+}
+
+.workflow-node-item.completed {
+  border-color: rgba(34, 197, 94, 0.34);
+  background: rgba(220, 252, 231, 0.48);
+}
+
+.workflow-node-item.completed .workflow-node-dot {
+  background: #22c55e;
+}
+
+.workflow-node-item.skipped {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(241, 245, 249, 0.72);
+}
+
+.workflow-node-item.skipped .workflow-node-dot {
+  background: #64748b;
+}
+
 .tasks-section {
   display: grid;
   grid-template-columns: 280px 1fr;
@@ -1441,6 +1666,14 @@ select:focus {
 }
 
 @media (max-width: 960px) {
+  .result-workbench {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-panel {
+    position: relative;
+  }
+
   .tasks-section {
     grid-template-columns: 1fr;
   }
@@ -2232,6 +2465,41 @@ select:focus {
   font-size: 13px !important;
   color: #64748b !important;
   font-weight: 500;
+}
+
+.document-library {
+  margin-top: 4px;
+}
+
+.document-dropzone {
+  border: 1px dashed rgba(59, 130, 246, 0.35);
+  border-radius: 14px;
+  padding: 14px;
+  background: rgba(239, 246, 255, 0.72);
+  color: #1f2937;
+}
+
+.document-dropzone strong {
+  display: block;
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+
+.document-dropzone p {
+  font-size: 12px !important;
+  color: #64748b !important;
+  line-height: 1.5;
+}
+
+.document-dropzone button {
+  margin-top: 10px;
+  width: 100%;
+  border: none;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(148, 163, 184, 0.22);
+  color: #64748b;
+  cursor: not-allowed;
 }
 
 .sidebar-actions {

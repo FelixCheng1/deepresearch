@@ -66,6 +66,20 @@ def fake_search(query, config, loop_count):
     )
 
 
+def empty_search(query, config, loop_count):
+    return (
+        {
+            "results": [],
+            "backend": "duckduckgo",
+            "answer": None,
+            "notices": [],
+        },
+        [],
+        None,
+        "duckduckgo",
+    )
+
+
 def test_agent_run_with_mock_llm_and_search(monkeypatch):
     monkeypatch.setattr(agent_module, "dispatch_search", fake_search)
     config = Configuration(enable_notes=True, notes_workspace=str(make_notes_dir()), rag_enabled=False)
@@ -95,6 +109,48 @@ def test_agent_stream_preserves_frontend_event_protocol(monkeypatch):
     assert "sources" in event_types
     assert "task_summary_chunk" in event_types
     assert "task_status" in event_types
+    assert "final_report" in event_types
+    assert event_types[-1] == "done"
+
+
+def test_agent_stream_emits_langgraph_workflow_nodes(monkeypatch):
+    monkeypatch.setattr(agent_module, "dispatch_search", fake_search)
+    config = Configuration(enable_notes=True, notes_workspace=str(make_notes_dir()), rag_enabled=False)
+    deep_agent = agent_module.DeepResearchAgent(config=config, chat_model=FakeChatModel())
+
+    events = list(deep_agent.run_stream("topic"))
+    workflow_nodes = [
+        event
+        for event in events
+        if event["type"] == "workflow_node" and event["status"] in {"completed", "skipped"}
+    ]
+    node_names = {event["node"] for event in workflow_nodes}
+
+    assert "plan_tasks" in node_names
+    assert "retrieve_documents" in node_names
+    assert "search_web" in node_names
+    assert "summarize_task" in node_names
+    assert "write_report" in node_names
+    assert any(
+        event["node"] == "retrieve_documents" and event["status"] == "skipped"
+        for event in workflow_nodes
+    )
+
+
+def test_agent_stream_continues_when_search_has_no_results(monkeypatch):
+    monkeypatch.setattr(agent_module, "dispatch_search", empty_search)
+    config = Configuration(enable_notes=True, notes_workspace=str(make_notes_dir()), rag_enabled=False)
+    deep_agent = agent_module.DeepResearchAgent(config=config, chat_model=FakeChatModel())
+
+    events = list(deep_agent.run_stream("topic"))
+    event_types = [event["type"] for event in events]
+    task_statuses = [
+        event
+        for event in events
+        if event["type"] == "task_status" and event.get("status") == "skipped"
+    ]
+
+    assert task_statuses
     assert "final_report" in event_types
     assert event_types[-1] == "done"
 

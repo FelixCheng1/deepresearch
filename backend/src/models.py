@@ -37,6 +37,15 @@ class SummaryState:
     structured_report: Optional[str] = field(default=None)
     report_note_id: Optional[str] = field(default=None)
     report_note_path: Optional[str] = field(default=None)
+    current_task_index: int = field(default=0)
+    current_task_id: Optional[int] = field(default=None)
+    current_context: str = field(default="")
+    current_sources_summary: str = field(default="")
+    current_search_result: Optional[dict] = field(default=None)
+    current_answer_text: Optional[str] = field(default=None)
+    current_search_backend: Optional[str] = field(default=None)
+    current_retrieval_context: str = field(default="")
+    stream_events: list[dict] = field(default_factory=list)
 
 
 @dataclass(kw_only=True)
