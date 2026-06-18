@@ -1,4 +1,4 @@
-"""Utility helpers shared across deep researcher services."""
+"""深度研究服务之间共享的工具函数。"""
 
 from __future__ import annotations
 
@@ -11,13 +11,13 @@ logger = logging.getLogger(__name__)
 
 
 def get_config_value(value: Any) -> str:
-    """Return configuration value as plain string."""
+    """将配置值转为普通字符串。"""
 
     return value if isinstance(value, str) else value.value
 
 
 def strip_thinking_tokens(text: str) -> str:
-    """Remove ``<think>`` sections from model responses."""
+    """移除模型响应中的 ``<think>`` 片段。"""
 
     while "<think>" in text and "</think>" in text:
         start = text.find("<think>")
@@ -32,7 +32,7 @@ def deduplicate_and_format_sources(
     *,
     fetch_full_page: bool = False,
 ) -> str:
-    """Format and deduplicate search results for downstream prompting."""
+    """为下游提示词格式化搜索结果并去重。"""
 
     if isinstance(search_response, dict):
         sources_list = search_response.get("results", [])
@@ -71,7 +71,7 @@ def deduplicate_and_format_sources(
 
 
 def format_sources(search_results: Dict[str, Any] | None) -> str:
-    """Return bullet list summarising search sources."""
+    """返回概括搜索来源的项目符号列表。"""
 
     if not search_results:
         return ""

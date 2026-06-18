@@ -14,92 +14,112 @@ class SearchAPI(Enum):
 
 
 class Configuration(BaseModel):
-    """Configuration options for the deep research assistant."""
+    """深度研究助手的配置项。"""
 
     max_web_research_loops: int = Field(
         default=3,
-        title="Research Depth",
-        description="Number of research iterations to perform",
+        title="研究深度",
+        description="要执行的研究迭代次数",
     )
     local_llm: str = Field(
         default="llama3.2",
-        title="Local Model Name",
-        description="Name of the locally hosted LLM (Ollama/LMStudio)",
+        title="本地模型名称",
+        description="本地托管大模型名称（Ollama/LMStudio）",
     )
     llm_provider: str = Field(
         default="ollama",
-        title="LLM Provider",
-        description="Provider identifier (ollama, lmstudio, or custom)",
+        title="大模型提供方",
+        description="提供方标识（ollama、lmstudio 或 custom）",
     )
     search_api: SearchAPI = Field(
         default=SearchAPI.DUCKDUCKGO,
-        title="Search API",
-        description="Web search API to use",
+        title="搜索 API",
+        description="要使用的网络搜索 API",
     )
     enable_notes: bool = Field(
         default=True,
-        title="Enable Notes",
-        description="Whether to store task progress in NoteTool",
+        title="启用笔记",
+        description="是否将任务进度保存到笔记存储",
     )
     notes_workspace: str = Field(
         default="./notes",
-        title="Notes Workspace",
-        description="Directory for NoteTool to persist task notes",
+        title="笔记工作区",
+        description="笔记存储写入任务笔记的目录",
     )
     fetch_full_page: bool = Field(
         default=True,
-        title="Fetch Full Page",
-        description="Include the full page content in the search results",
+        title="抓取完整页面",
+        description="是否在搜索结果中包含完整页面内容",
     )
     ollama_base_url: str = Field(
         default="http://localhost:11434",
-        title="Ollama Base URL",
-        description="Base URL for Ollama API (without /v1 suffix)",
+        title="Ollama 基础 URL",
+        description="Ollama API 基础地址（不含 /v1 后缀）",
     )
     lmstudio_base_url: str = Field(
         default="http://localhost:1234/v1",
-        title="LMStudio Base URL",
-        description="Base URL for LMStudio OpenAI-compatible API",
+        title="LMStudio 基础 URL",
+        description="LMStudio OpenAI 兼容 API 基础地址",
     )
     strip_thinking_tokens: bool = Field(
         default=True,
-        title="Strip Thinking Tokens",
-        description="Whether to strip <think> tokens from model responses",
+        title="移除思考标签",
+        description="是否从模型响应中移除 <think> 标签内容",
     )
     use_tool_calling: bool = Field(
         default=False,
-        title="Use Tool Calling",
-        description="Use tool calling instead of JSON mode for structured output",
+        title="使用工具调用",
+        description="是否使用工具调用而不是 JSON 模式生成结构化输出",
     )
     llm_api_key: Optional[str] = Field(
         default=None,
-        title="LLM API Key",
-        description="Optional API key when using custom OpenAI-compatible services",
+        title="大模型 API Key",
+        description="使用自定义 OpenAI 兼容服务时的可选 API Key",
     )
     llm_base_url: Optional[str] = Field(
         default=None,
-        title="LLM Base URL",
-        description="Optional base URL when using custom OpenAI-compatible services",
+        title="大模型基础 URL",
+        description="使用自定义 OpenAI 兼容服务时的可选基础地址",
     )
     llm_model_id: Optional[str] = Field(
         default=None,
-        title="LLM Model ID",
-        description="Optional model identifier for custom OpenAI-compatible services",
+        title="大模型 ID",
+        description="使用自定义 OpenAI 兼容服务时的可选模型标识",
+    )
+    database_url: Optional[str] = Field(
+        default=None,
+        title="数据库 URL",
+        description="为未来 Postgres + pgvector 预留的数据库连接字符串",
+    )
+    rag_enabled: bool = Field(
+        default=False,
+        title="启用 RAG",
+        description="为未来启用检索增强生成预留的开关",
+    )
+    embedding_model: Optional[str] = Field(
+        default=None,
+        title="嵌入模型",
+        description="为未来向量索引预留的嵌入模型标识",
+    )
+    vector_namespace: str = Field(
+        default="deep_research",
+        title="向量命名空间",
+        description="为未来研究历史和上传文档预留的向量命名空间",
     )
 
     @classmethod
     def from_env(cls, overrides: Optional[dict[str, Any]] = None) -> "Configuration":
-        """Create a configuration object using environment variables and overrides."""
+        """根据环境变量和覆盖项创建配置对象。"""
 
         raw_values: dict[str, Any] = {}
 
-        # Load values from environment variables based on field names
+        # 按字段名从环境变量读取配置值
         for field_name in cls.model_fields.keys():
             env_key = field_name.upper()
             if env_key in os.environ:
                 raw_values[field_name] = os.environ[env_key]
 
-        # Additional mappings for explicit env names
+        # 显式环境变量名称的补充映射
         env_aliases = {
             "local_llm": os.getenv("LOCAL_LLM"),
             "llm_provider": os.getenv("LLM_PROVIDER"),
@@ -115,6 +135,10 @@ class Configuration(BaseModel):
             "search_api": os.getenv("SEARCH_API"),
             "enable_notes": os.getenv("ENABLE_NOTES"),
             "notes_workspace": os.getenv("NOTES_WORKSPACE"),
+            "database_url": os.getenv("DATABASE_URL"),
+            "rag_enabled": os.getenv("RAG_ENABLED"),
+            "embedding_model": os.getenv("EMBEDDING_MODEL"),
+            "vector_namespace": os.getenv("VECTOR_NAMESPACE"),
         }
 
         for key, value in env_aliases.items():
@@ -129,7 +153,7 @@ class Configuration(BaseModel):
         return cls(**raw_values)
 
     def sanitized_ollama_url(self) -> str:
-        """Ensure Ollama base URL includes the /v1 suffix required by OpenAI clients."""
+        """确保 Ollama 基础地址包含 OpenAI 客户端需要的 /v1 后缀。"""
 
         base = self.ollama_base_url.rstrip("/")
         if not base.endswith("/v1"):
@@ -137,7 +161,7 @@ class Configuration(BaseModel):
         return base
 
     def resolved_model(self) -> Optional[str]:
-        """Best-effort resolution of the model identifier to use."""
+        """尽力解析当前应使用的模型标识。"""
 
         return self.llm_model_id or self.local_llm
 

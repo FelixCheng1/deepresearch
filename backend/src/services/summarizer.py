@@ -1,40 +1,45 @@
-"""Task summarization utilities."""
+"""任务总结工具。"""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from typing import Tuple
 
-from hello_agents import ToolAwareSimpleAgent
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from models import SummaryState, TodoItem
 from config import Configuration
+from prompts import task_summarizer_instructions
+from services.llm import message_content
 from utils import strip_thinking_tokens
-from services.notes import build_note_guidance
 from services.text_processing import strip_tool_calls
 
 
 class SummarizationService:
-    """Handles synchronous and streaming task summarization."""
+    """处理同步和流式任务总结。"""
 
     def __init__(
         self,
-        summarizer_factory: Callable[[], ToolAwareSimpleAgent],
+        summarizer_factory: Callable[[], object],
         config: Configuration,
     ) -> None:
         self._agent_factory = summarizer_factory
         self._config = config
 
     def summarize_task(self, state: SummaryState, task: TodoItem, context: str) -> str:
-        """Generate a task-specific summary using the summarizer agent."""
+        """使用总结模型生成指定任务的总结。"""
 
         prompt = self._build_prompt(state, task, context)
 
         agent = self._agent_factory()
-        try:
-            response = agent.run(prompt)
-        finally:
-            agent.clear_history()
+        response = message_content(
+            agent.invoke(
+                [
+                    SystemMessage(content=task_summarizer_instructions.strip()),
+                    HumanMessage(content=prompt),
+                ]
+            )
+        )
 
         summary_text = response.strip()
         if self._config.strip_thinking_tokens:
@@ -47,7 +52,7 @@ class SummarizationService:
     def stream_task_summary(
         self, state: SummaryState, task: TodoItem, context: str
     ) -> Tuple[Iterator[str], Callable[[], str]]:
-        """Stream the summary text for a task while collecting full output."""
+        """流式生成任务总结文本，同时收集完整输出。"""
 
         prompt = self._build_prompt(state, task, context)
         remove_thinking = self._config.strip_thinking_tokens
@@ -55,6 +60,10 @@ class SummarizationService:
         visible_output = ""
         emit_index = 0
         agent = self._agent_factory()
+        messages = [
+            SystemMessage(content=task_summarizer_instructions.strip()),
+            HumanMessage(content=prompt),
+        ]
 
         def flush_visible() -> Iterator[str]:
             nonlocal emit_index, raw_buffer
@@ -82,24 +91,24 @@ class SummarizationService:
         def generator() -> Iterator[str]:
             nonlocal raw_buffer, visible_output, emit_index
             try:
-                for chunk in agent.stream_run(prompt):
-                    raw_buffer += chunk
+                for chunk in agent.stream(messages):
+                    chunk_text = message_content(chunk)
+                    raw_buffer += chunk_text
                     if remove_thinking:
                         for segment in flush_visible():
                             visible_output += segment
                             if segment:
                                 yield segment
                     else:
-                        visible_output += chunk
-                        if chunk:
-                            yield chunk
+                        visible_output += chunk_text
+                        if chunk_text:
+                            yield chunk_text
             finally:
                 if remove_thinking:
                     for segment in flush_visible():
                         visible_output += segment
                         if segment:
                             yield segment
-                agent.clear_history()
 
         def get_summary() -> str:
             if remove_thinking:
@@ -112,7 +121,7 @@ class SummarizationService:
         return generator(), get_summary
 
     def _build_prompt(self, state: SummaryState, task: TodoItem, context: str) -> str:
-        """Construct the summarization prompt shared by both modes."""
+        """构造同步和流式模式共用的总结提示词。"""
 
         return (
             f"任务主题：{state.research_topic}\n"
@@ -120,6 +129,5 @@ class SummarizationService:
             f"任务目标：{task.intent}\n"
             f"检索查询：{task.query}\n"
             f"任务上下文：\n{context}\n"
-            f"{build_note_guidance(task)}\n"
-            "请按照以上协作要求先同步笔记，然后返回一份面向用户的 Markdown 总结（仍遵循任务总结模板）。"
+            "请只返回面向用户的 Markdown 任务总结。不要输出工具调用、JSON 工具参数或代码块。"
         )

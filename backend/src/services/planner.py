@@ -1,4 +1,4 @@
-"""Service responsible for converting the research topic into actionable tasks."""
+"""负责将研究主题转换为可执行任务的服务。"""
 
 from __future__ import annotations
 
@@ -7,11 +7,12 @@ import logging
 import re
 from typing import Any, List, Optional
 
-from hello_agents import ToolAwareSimpleAgent
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from models import SummaryState, TodoItem
 from config import Configuration
-from prompts import get_current_date, todo_planner_instructions
+from prompts import get_current_date, todo_planner_instructions, todo_planner_system_prompt
+from services.llm import message_content
 from utils import strip_thinking_tokens
 
 logger = logging.getLogger(__name__)
@@ -22,22 +23,28 @@ TOOL_CALL_PATTERN = re.compile(
 )
 
 class PlanningService:
-    """Wraps the planner agent to produce structured TODO items."""
+    """调用规划模型生成结构化 TODO 项。"""
 
-    def __init__(self, planner_agent: ToolAwareSimpleAgent, config: Configuration) -> None:
-        self._agent = planner_agent
+    def __init__(self, chat_model: Any, config: Configuration) -> None:
+        self._chat_model = chat_model
         self._config = config
 
     def plan_todo_list(self, state: SummaryState) -> List[TodoItem]:
-        """Ask the planner agent to break the topic into actionable tasks."""
+        """要求规划模型将主题拆解为可执行任务。"""
 
         prompt = todo_planner_instructions.format(
             current_date=get_current_date(),
             research_topic=state.research_topic,
         )
 
-        response = self._agent.run(prompt)
-        self._agent.clear_history()
+        response = message_content(
+            self._chat_model.invoke(
+                [
+                    SystemMessage(content=todo_planner_system_prompt.strip()),
+                    HumanMessage(content=prompt),
+                ]
+            )
+        )
 
         logger.info("Planner raw output (truncated): %s", response[:500])
 
@@ -68,20 +75,62 @@ class PlanningService:
 
     @staticmethod
     def create_fallback_task(state: SummaryState) -> TodoItem:
-        """Create a minimal fallback task when planning failed."""
+        """规划失败时创建兼容旧调用的单个兜底任务。"""
 
-        return TodoItem(
-            id=1,
-            title="基础背景梳理",
-            intent="收集主题的核心背景与最新动态",
-            query=f"{state.research_topic} 最新进展" if state.research_topic else "基础背景梳理",
-        )
+        return PlanningService.create_fallback_tasks(state, start_id=1, count=1)[0]
+
+    @staticmethod
+    def create_fallback_tasks(
+        state: SummaryState,
+        *,
+        start_id: int = 1,
+        count: int = 4,
+        existing_titles: set[str] | None = None,
+    ) -> List[TodoItem]:
+        """规划失败或任务过少时创建多任务兜底清单。"""
+
+        topic = (state.research_topic or "").strip()
+        base_query = topic or "研究主题"
+        templates = [
+            (
+                "基础背景梳理",
+                "收集主题的核心背景、最新动态与关键概念，建立后续分析上下文。",
+                f"{base_query} 最新进展 背景",
+            ),
+            (
+                "技术机制分析",
+                "分析主题背后的核心原理、技术架构与关键组成部分。",
+                f"{base_query} 原理 架构 关键技术",
+            ),
+            (
+                "应用案例调研",
+                "调研主题在真实场景中的应用案例、实践路径与代表性成果。",
+                f"{base_query} 应用案例 实践",
+            ),
+            (
+                "风险挑战评估",
+                "识别主题当前的局限、风险、争议点与未来发展趋势。",
+                f"{base_query} 局限 挑战 趋势",
+            ),
+        ]
+
+        skipped = existing_titles or set()
+        tasks: List[TodoItem] = []
+        next_id = start_id
+        for title, intent, query in templates:
+            if title in skipped:
+                continue
+            tasks.append(TodoItem(id=next_id, title=title, intent=intent, query=query))
+            next_id += 1
+            if len(tasks) >= count:
+                break
+        return tasks
 
     # ------------------------------------------------------------------
-    # Parsing helpers
+    # 解析辅助方法
     # ------------------------------------------------------------------
     def _extract_tasks(self, raw_response: str) -> List[dict[str, Any]]:
-        """Parse planner output into a list of task dictionaries."""
+        """将规划输出解析为任务字典列表。"""
 
         text = raw_response.strip()
         if self._config.strip_thinking_tokens:
@@ -111,7 +160,7 @@ class PlanningService:
         return tasks
 
     def _extract_json_payload(self, text: str) -> Optional[dict[str, Any] | list]:
-        """Try to locate and parse a JSON object or array from the text."""
+        """尝试从文本中定位并解析 JSON 对象或数组。"""
 
         start = text.find("{")
         end = text.rfind("}")
@@ -134,7 +183,7 @@ class PlanningService:
         return None
 
     def _extract_tool_payload(self, text: str) -> Optional[dict[str, Any]]:
-        """Parse the first TOOL_CALL expression in the output."""
+        """解析输出中的第一个 TOOL_CALL 表达式。"""
 
         match = TOOL_CALL_PATTERN.search(text)
         if not match:

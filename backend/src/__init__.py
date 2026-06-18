@@ -1,4 +1,4 @@
-"""HelloAgents Deep Research - A deep research assistant powered by HelloAgents."""
+"""LangGraph Deep Research：基于 LangChain 的深度研究助手。"""
 
 __version__ = "0.0.1"
 

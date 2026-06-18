@@ -1,4 +1,4 @@
-"""Utility for collecting and exposing tool call events."""
+"""用于收集并暴露工具调用事件的工具。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ToolCallEvent:
-    """Internal representation of a tool call event."""
+    """工具调用事件的内部表示。"""
 
     id: int
     agent: str
@@ -29,7 +29,7 @@ class ToolCallEvent:
 
 
 class ToolCallTracker:
-    """Collects tool call events and converts them to SSE payloads."""
+    """收集工具调用事件，并转换为 SSE 载荷。"""
 
     def __init__(self, notes_workspace: Optional[str]) -> None:
         self._notes_workspace = notes_workspace
@@ -86,7 +86,7 @@ class ToolCallTracker:
             sink(self._build_payload(event, step=None))
 
     # ------------------------------------------------------------------
-    # Draining helpers
+    # 事件提取辅助方法
     # ------------------------------------------------------------------
     def drain(self, state: SummaryState, *, step: Optional[int] = None) -> list[dict[str, Any]]:
         """提取尚未消费的工具调用事件，并同步任务的 note_id。"""
@@ -113,14 +113,14 @@ class ToolCallTracker:
         return payloads
 
     def reset(self) -> None:
-        """Clear recorded events."""
+        """清空已记录的事件。"""
 
         with self._lock:
             self._events.clear()
             self._cursor = 0
 
     def as_dicts(self) -> list[dict[str, Any]]:
-        """Expose a snapshot of raw events for backwards compatibility."""
+        """为向后兼容暴露原始事件快照。"""
 
         with self._lock:
             return [
@@ -138,7 +138,7 @@ class ToolCallTracker:
             ]
 
     def set_event_sink(self, sink: Optional[Callable[[dict[str, Any]], None]]) -> None:
-        """Register a callback for immediate tool event notifications."""
+        """注册用于即时工具事件通知的回调。"""
 
         self._event_sink = sink
 
@@ -161,10 +161,10 @@ class ToolCallTracker:
         return payload
 
     # ------------------------------------------------------------------
-    # Internal helpers
+    # 内部辅助方法
     # ------------------------------------------------------------------
     def _attach_note_to_task(self, tasks: list[TodoItem], task_id: int, note_id: str) -> None:
-        """Update matching TODO item with note metadata."""
+        """用笔记元数据更新匹配的 TODO 项。"""
 
         for task in tasks:
             if task.id != task_id:

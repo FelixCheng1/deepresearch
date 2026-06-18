@@ -1,4 +1,4 @@
-"""FastAPI entrypoint exposing the DeepResearchAgent via HTTP."""
+"""通过 HTTP 暴露 DeepResearchAgent 的 FastAPI 入口。"""
 
 from __future__ import annotations
 
@@ -37,29 +37,29 @@ logger.add(
 
 
 class ResearchRequest(BaseModel):
-    """Payload for triggering a research run."""
+    """触发研究任务的请求体。"""
 
-    topic: str = Field(..., description="Research topic supplied by the user")
+    topic: str = Field(..., description="用户提供的研究主题")
     search_api: SearchAPI | None = Field(
         default=None,
-        description="Override the default search backend configured via env",
+        description="覆盖环境变量配置的默认搜索后端",
     )
 
 
 class ResearchResponse(BaseModel):
-    """HTTP response containing the generated report and structured tasks."""
+    """包含生成报告和结构化任务的 HTTP 响应。"""
 
     report_markdown: str = Field(
-        ..., description="Markdown-formatted research report including sections"
+        ..., description="包含分节内容的 Markdown 格式研究报告"
     )
     todo_items: list[dict[str, Any]] = Field(
         default_factory=list,
-        description="Structured TODO items with summaries and sources",
+        description="包含总结和来源信息的结构化 TODO 项",
     )
 
 
 def _mask_secret(value: Optional[str], visible: int = 4) -> str:
-    """Mask sensitive tokens while keeping leading and trailing characters."""
+    """遮盖敏感令牌，同时保留首尾少量字符。"""
     if not value:
         return "unset"
 
@@ -79,7 +79,7 @@ def _build_config(payload: ResearchRequest) -> Configuration:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="HelloAgents Deep Researcher")
+    app = FastAPI(title="LangGraph Deep Researcher")
 
     app.add_middleware(
         CORSMiddleware,
@@ -124,10 +124,10 @@ def create_app() -> FastAPI:
             config = _build_config(payload)
             agent = DeepResearchAgent(config=config)
             result = agent.run(payload.topic)
-        except ValueError as exc:  # Likely due to unsupported configuration
+        except ValueError as exc:  # 通常来自不受支持的配置
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except Exception as exc:  # pragma: no cover - defensive guardrail
-            raise HTTPException(status_code=500, detail="Research failed") from exc
+        except Exception as exc:  # pragma: no cover - 防御性保护
+            raise HTTPException(status_code=500, detail="研究失败") from exc
 
         todo_payload = [
             {
@@ -161,7 +161,7 @@ def create_app() -> FastAPI:
             try:
                 for event in agent.run_stream(payload.topic):
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-            except Exception as exc:  # pragma: no cover - defensive guardrail
+            except Exception as exc:  # pragma: no cover - 防御性保护
                 logger.exception("Streaming research failed")
                 error_payload = {"type": "error", "detail": str(exc)}
                 yield f"data: {json.dumps(error_payload, ensure_ascii=False)}\n\n"
@@ -182,12 +182,17 @@ app = create_app()
 
 
 if __name__ == "__main__":
+    import os
+
     import uvicorn
+
+    # Windows 下 reload 会启动子进程并重新导入 LangGraph，直接运行脚本时默认关闭更稳。
+    reload_enabled = os.getenv("UVICORN_RELOAD", "").lower() in {"1", "true", "yes"}
 
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,
+        reload=reload_enabled,
         log_level="info"
     )

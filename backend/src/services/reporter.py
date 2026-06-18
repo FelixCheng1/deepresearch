@@ -1,26 +1,28 @@
-"""Service that consolidates task results into the final report."""
+"""将任务结果整合为最终报告的服务。"""
 
 from __future__ import annotations
 
-import json
+from typing import Any
 
-from hello_agents import ToolAwareSimpleAgent
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from models import SummaryState
 from config import Configuration
+from prompts import report_writer_instructions
+from services.llm import message_content
 from utils import strip_thinking_tokens
 from services.text_processing import strip_tool_calls
 
 
 class ReportingService:
-    """Generates the final structured report."""
+    """生成最终结构化报告。"""
 
-    def __init__(self, report_agent: ToolAwareSimpleAgent, config: Configuration) -> None:
-        self._agent = report_agent
+    def __init__(self, chat_model: Any, config: Configuration) -> None:
+        self._chat_model = chat_model
         self._config = config
 
     def generate_report(self, state: SummaryState) -> str:
-        """Generate a structured report based on completed tasks."""
+        """基于已完成任务生成结构化报告。"""
 
         tasks_block = []
         for task in state.todo_items:
@@ -35,37 +37,20 @@ class ReportingService:
                 f"- 来源概览：\n{sources_block}\n"
             )
 
-        note_references = []
-        for task in state.todo_items:
-            if task.note_id:
-                note_references.append(
-                    f"- 任务 {task.id}《{task.title}》：note_id={task.note_id}"
-                )
-
-        notes_section = "\n".join(note_references) if note_references else "- 暂无可用任务笔记"
-
-        read_template = json.dumps({"action": "read", "note_id": "<note_id>"}, ensure_ascii=False)
-        create_conclusion_template = json.dumps(
-            {
-                "action": "create",
-                "title": f"研究报告：{state.research_topic}",
-                "note_type": "conclusion",
-                "tags": ["deep_research", "report"],
-                "content": "请在此沉淀最终报告要点",
-            },
-            ensure_ascii=False,
-        )
-
         prompt = (
             f"研究主题：{state.research_topic}\n"
             f"任务概览：\n{''.join(tasks_block)}\n"
-            f"可用任务笔记：\n{notes_section}\n"
-            f"请针对每条任务笔记使用格式：[TOOL_CALL:note:{read_template}] 读取内容，整合所有信息后撰写报告。\n"
-            f"如需输出汇总结论，可追加调用：[TOOL_CALL:note:{create_conclusion_template}] 保存报告要点。"
+            "请只基于以上任务概览生成面向用户的 Markdown 最终报告。不要输出工具调用、JSON 工具参数或代码块。"
         )
 
-        response = self._agent.run(prompt)
-        self._agent.clear_history()
+        response = message_content(
+            self._chat_model.invoke(
+                [
+                    SystemMessage(content=report_writer_instructions.strip()),
+                    HumanMessage(content=prompt),
+                ]
+            )
+        )
 
         report_text = response.strip()
         if self._config.strip_thinking_tokens:

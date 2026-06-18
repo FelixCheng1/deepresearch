@@ -4,7 +4,11 @@ __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
-backend/notes/
+notes/
+backend/test-tmp/
+backend/pytest-cache-files-*/
+.tmp-pytest/
+.pytest_cache/
 
 # Environment files
 .env
