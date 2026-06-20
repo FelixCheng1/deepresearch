@@ -248,7 +248,7 @@ def test_tool_call_only_summary_falls_back_to_empty_message(monkeypatch):
 
 def test_fastapi_research_endpoint_with_mock_agent(monkeypatch):
     class FakeAgent:
-        def __init__(self, config):
+        def __init__(self, config, **kwargs):
             pass
 
         def run(self, topic):

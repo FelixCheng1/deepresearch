@@ -28,6 +28,8 @@ class TaskGraphState(TypedDict, total=False):
     task: TodoItem
     task_index: int
     retrieval_context: str
+    retrieval_sources_summary: str
+    retrieval_chunks: list
     search_context: str
 
 

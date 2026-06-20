@@ -107,10 +107,25 @@ class ResearchReport:
 
 @dataclass(kw_only=True)
 class ResearchDocumentChunk:
-    """未来用于研究历史和上传文档 RAG 的片段结构。"""
+    """上传文档切块后的检索片段。"""
 
     id: str
-    source_id: str
+    document_id: str
+    document_title: str
+    chunk_index: int
     text: str
     metadata: dict = field(default_factory=dict)
 
+
+@dataclass(kw_only=True)
+class ResearchDocument:
+    """上传到文档库的原始文本文件。"""
+
+    id: str
+    filename: str
+    content_type: str
+    size_bytes: int
+    raw_text: str
+    summary: Optional[str] = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    chunks: list[ResearchDocumentChunk] = field(default_factory=list)

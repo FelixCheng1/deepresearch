@@ -96,6 +96,21 @@ class Configuration(BaseModel):
         title="启用 RAG",
         description="为未来启用检索增强生成预留的开关",
     )
+    rag_top_k: int = Field(
+        default=5,
+        title="RAG 检索片段数",
+        description="每个任务最多注入的文档库片段数量",
+    )
+    rag_context_max_chars: int = Field(
+        default=6000,
+        title="RAG 上下文长度上限",
+        description="每个任务最多注入的文档库上下文字符数",
+    )
+    rag_min_score: float = Field(
+        default=0.1,
+        title="RAG 最低匹配分",
+        description="低于该分数的文档片段不会进入任务上下文",
+    )
     embedding_model: Optional[str] = Field(
         default=None,
         title="嵌入模型",
@@ -137,6 +152,9 @@ class Configuration(BaseModel):
             "notes_workspace": os.getenv("NOTES_WORKSPACE"),
             "database_url": os.getenv("DATABASE_URL"),
             "rag_enabled": os.getenv("RAG_ENABLED"),
+            "rag_top_k": os.getenv("RAG_TOP_K"),
+            "rag_context_max_chars": os.getenv("RAG_CONTEXT_MAX_CHARS"),
+            "rag_min_score": os.getenv("RAG_MIN_SCORE"),
             "embedding_model": os.getenv("EMBEDDING_MODEL"),
             "vector_namespace": os.getenv("VECTOR_NAMESPACE"),
         }

@@ -94,3 +94,77 @@ export async function runResearchStream(
     }
   }
 }
+
+
+export interface DocumentSummary {
+  id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  summary: string | null;
+  created_at: string;
+  chunk_count: number;
+}
+
+export interface DocumentDetail extends DocumentSummary {
+  raw_text: string;
+  chunks: Array<{
+    id: string;
+    document_id: string;
+    document_title: string;
+    chunk_index: number;
+    text: string;
+    metadata: Record<string, unknown>;
+  }>;
+}
+
+export async function uploadDocument(file: File): Promise<DocumentSummary> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${baseURL}/documents/upload`, {
+    method: "POST",
+    body: formData
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(errorText || `文档请求失败，状态码：${response.status}`);
+  }
+
+  const payload = await response.json() as { document: DocumentSummary };
+  return payload.document;
+}
+
+export async function listDocuments(): Promise<DocumentSummary[]> {
+  const response = await fetch(`${baseURL}/documents`);
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(errorText || `文档请求失败，状态码：${response.status}`);
+  }
+
+  const payload = await response.json() as { documents: DocumentSummary[] };
+  return payload.documents;
+}
+
+export async function getDocument(documentId: string): Promise<DocumentDetail> {
+  const response = await fetch(`${baseURL}/documents/${documentId}`);
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(errorText || `文档请求失败，状态码：${response.status}`);
+  }
+
+  return await response.json() as DocumentDetail;
+}
+export async function deleteDocument(documentId: string): Promise<void> {
+  const response = await fetch(`${baseURL}/documents/${documentId}`, {
+    method: "DELETE"
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(errorText || `删除文档失败，状态码：${response.status}`);
+  }
+}

@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from config import Configuration
 from models import (
+    ResearchDocumentChunk,
     ResearchReport,
     ResearchRun,
     ResearchSource,
@@ -25,7 +26,7 @@ from services.note_store import NoteStore
 from services.planner import PlanningService
 from services.repository import ResearchRepository, create_research_repository
 from services.reporter import ReportingService
-from services.retriever import DisabledRetriever, Retriever
+from services.retriever import Retriever, create_retriever
 from services.search import dispatch_search, prepare_research_context
 from services.summarizer import SummarizationService
 from services.tool_events import ToolCallTracker
@@ -69,7 +70,7 @@ class DeepResearchAgent:
             else None
         )
         self.repository = repository or create_research_repository(self.config)
-        self.retriever = retriever or DisabledRetriever(self.config)
+        self.retriever = retriever or create_retriever(self.config, self.repository)
         self._tool_tracker = ToolCallTracker(
             self.config.notes_workspace if self.config.enable_notes else None
         )
@@ -286,23 +287,34 @@ class DeepResearchAgent:
         task = payload["task"]
 
         self._workflow(state, "retrieve_documents", "in_progress", task=task)
-        chunks = self.retriever.retrieve(task.query)
+        retrieval_query = self._retrieval_query(state, task)
+        chunks = self.retriever.retrieve(retrieval_query)
         if chunks:
-            retrieval_context = "\n\n".join(chunk.text for chunk in chunks)
-            detail = f"找到 {len(chunks)} 个文档片段"
+            context_chunks = self._limit_retrieval_chunks(chunks)
+            retrieval_context = self._format_retrieval_context(context_chunks)
+            sources_summary = self._format_document_sources(context_chunks)
+            detail = f"找到 {len(context_chunks)} / {len(chunks)} 个文档片段"
             status = "completed"
         else:
             retrieval_context = ""
+            sources_summary = ""
             detail = "未找到可用文档片段"
             status = "skipped"
         self._workflow(state, "retrieve_documents", status, task=task, detail=detail)
-        return {"retrieval_context": retrieval_context}
+        return {
+            "retrieval_context": retrieval_context,
+            "retrieval_sources_summary": sources_summary,
+            "retrieval_chunks": context_chunks if chunks else [],
+        }
 
     def _task_search_web(self, payload: dict[str, Any]) -> dict[str, Any]:
         state = payload["state"]
         task = payload["task"]
 
         self._workflow(state, "search_web", "in_progress", task=task)
+        retrieval_context = payload.get("retrieval_context") or ""
+        retrieval_sources_summary = payload.get("retrieval_sources_summary") or ""
+        retrieval_chunks = payload.get("retrieval_chunks") or []
         search_result, notices, answer_text, backend = dispatch_search(
             task.query,
             self.config,
@@ -322,25 +334,38 @@ class DeepResearchAgent:
                     },
                 )
 
-        if not search_result or not search_result.get("results"):
+        has_web_results = bool(search_result and search_result.get("results"))
+        if has_web_results:
+            web_sources_summary, web_context = prepare_research_context(
+                search_result,
+                answer_text,
+                self.config,
+            )
+        else:
+            web_sources_summary = ""
+            web_context = ""
+
+        context_parts = []
+        if retrieval_context:
+            context_parts.append(f"文档库检索上下文：\n{retrieval_context}")
+        if web_context:
+            context_parts.append(web_context)
+        context = "\n\n".join(context_parts)
+
+        source_parts = [part for part in [retrieval_sources_summary, web_sources_summary] if part]
+        sources_summary = "\n\n".join(source_parts)
+
+        if not context:
             task.status = "skipped"
             self._workflow(state, "search_web", "skipped", task=task, detail="没有获得搜索结果")
             return {"task": task, "search_context": ""}
-
-        sources_summary, context = prepare_research_context(
-            search_result,
-            answer_text,
-            self.config,
-        )
-        retrieval_context = payload.get("retrieval_context") or ""
-        if retrieval_context:
-            context = f"历史/文档检索上下文：\n{retrieval_context}\n\n{context}"
 
         task.sources_summary = sources_summary
         with self._shared_lock:
             state.web_research_results.append(context)
             state.sources_gathered.append(sources_summary)
             state.research_loop_count += 1
+            self._save_document_sources(task, retrieval_chunks)
             self._save_sources(task, search_result)
 
         self._emit_event(
@@ -357,7 +382,8 @@ class DeepResearchAgent:
                 "stream_token": task.stream_token,
             },
         )
-        self._workflow(state, "search_web", "completed", task=task, detail=f"使用 {backend} 完成搜索")
+        detail = f"使用 {backend} 完成搜索" if has_web_results else "使用文档库片段继续总结"
+        self._workflow(state, "search_web", "completed", task=task, detail=detail)
         return {"task": task, "search_context": context}
 
     def _task_summarize_task(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -691,7 +717,6 @@ class DeepResearchAgent:
         }
         result = self.note_store.run(payload)
         self._record_note_call("任务总结专家", payload, result)
-
     def _record_note_call(self, agent_name: str, payload: dict[str, Any], result: str) -> None:
         self._tool_tracker.record(
             {
@@ -715,6 +740,92 @@ class DeepResearchAgent:
             note_path=task.note_path,
         )
 
+    def _retrieval_query(self, state: SummaryState, task: TodoItem) -> str:
+        parts = [
+            state.research_topic or "",
+            task.title or "",
+            task.intent or "",
+            task.query or "",
+        ]
+        return "\n".join(part.strip() for part in parts if part and part.strip())
+
+    def _limit_retrieval_chunks(self, chunks: list[ResearchDocumentChunk]) -> list[ResearchDocumentChunk]:
+        max_chars = max(500, self.config.rag_context_max_chars)
+        selected: list[ResearchDocumentChunk] = []
+        used = 0
+        for chunk in chunks:
+            block_size = len(chunk.document_title) + len(chunk.text) + 32
+            if selected and used + block_size > max_chars:
+                break
+            selected.append(chunk)
+            used += block_size
+            if used >= max_chars:
+                break
+        return selected
+
+    def _format_retrieval_context(self, chunks: list[ResearchDocumentChunk]) -> str:
+        lines: list[str] = []
+        remaining = max(500, self.config.rag_context_max_chars)
+        for chunk in chunks:
+            score = chunk.metadata.get("score")
+            matched_terms = chunk.metadata.get("matched_terms") or []
+            header_parts = [f"[文档库] {chunk.document_title} · 片段 {chunk.chunk_index}"]
+            if isinstance(score, (int, float)):
+                header_parts.append(f"相关度 {score:.2f}")
+            if matched_terms:
+                header_parts.append(f"命中 {', '.join(str(term) for term in matched_terms[:6])}")
+            header = " · ".join(header_parts)
+            budget = remaining - len(header) - 2
+            if budget <= 0:
+                break
+            text = chunk.text.strip()
+            if len(text) > budget:
+                text = f"{text[: max(0, budget - 3)].rstrip()}..."
+            block = f"{header}\n{text}"
+            lines.append(block)
+            remaining -= len(block) + 2
+            if remaining <= 0:
+                break
+        return "\n\n".join(lines)
+
+    def _format_document_sources(self, chunks: list[ResearchDocumentChunk]) -> str:
+        lines: list[str] = []
+        seen: set[str] = set()
+        for chunk in chunks:
+            key = f"{chunk.document_id}:{chunk.chunk_index}"
+            if key in seen:
+                continue
+            seen.add(key)
+            score = chunk.metadata.get("score")
+            score_text = f" · 相关度 {score:.2f}" if isinstance(score, (int, float)) else ""
+            matched_terms = chunk.metadata.get("matched_terms") or []
+            matched_text = ", ".join(str(term) for term in matched_terms[:8]) or "无显式关键词"
+            snippet = str(chunk.metadata.get("snippet") or chunk.text.replace("\n", " ").strip()[:220])
+            lines.extend(
+                [
+                    f"* {chunk.document_title} · 片段 {chunk.chunk_index}{score_text} : document://{chunk.document_id}#chunk-{chunk.chunk_index}",
+                    f"  - 命中: {matched_text}",
+                    f"  - 摘要: {snippet}",
+                ]
+            )
+        return "\n".join(lines)
+
+    def _save_document_sources(self, task: TodoItem, chunks: list[ResearchDocumentChunk]) -> None:
+        seen: set[str] = set()
+        for chunk in chunks:
+            key = f"{chunk.document_id}:{chunk.chunk_index}"
+            if key in seen:
+                continue
+            seen.add(key)
+            self.repository.save_source(
+                ResearchSource(
+                    run_id=self.run_id,
+                    task_id=task.id,
+                    title=f"{chunk.document_title} · 片段 {chunk.chunk_index}",
+                    url=f"document://{chunk.document_id}#chunk-{chunk.chunk_index}",
+                    content=chunk.text,
+                )
+            )
     def _save_sources(self, task: TodoItem, search_result: dict[str, Any] | None) -> None:
         if not search_result:
             return
@@ -832,4 +943,6 @@ def run_deep_research(topic: str, config: Configuration | None = None) -> Summar
 
     agent = DeepResearchAgent(config=config)
     return agent.run(topic)
+
+
 

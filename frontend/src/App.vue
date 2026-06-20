@@ -50,6 +50,76 @@
             </label>
           </section>
 
+          <section class="home-document-library document-library">
+            <div class="document-library-head">
+              <label>文档库</label>
+              <span>{{ documents.length ? `${documents.length} 个文档可检索` : "未上传文档" }}</span>
+            </div>
+            <div class="document-dropzone">
+              <strong>{{ documents.length ? "研究将优先检索这些文档" : "先上传研究文档" }}</strong>
+              <p>{{ documentLoading ? "正在切块入库..." : "支持 .txt / .md，上传完成后再开始研究。" }}</p>
+              <label class="upload-button" :class="{ disabled: uploadDisabled }">
+                <input
+                  type="file"
+                  accept=".txt,.md,text/plain,text/markdown"
+                  :disabled="uploadDisabled"
+                  @change="handleDocumentUpload"
+                />
+                {{ documentLoading ? "上传中..." : "选择文档" }}
+              </label>
+            </div>
+            <p v-if="documentSuccess" class="document-message success">{{ documentSuccess }}</p>
+            <p v-if="documentError" class="document-message error">{{ documentError }}</p>
+            <p v-if="!documents.length && !documentLoading" class="document-empty">暂无文档，仍可直接开始研究。</p>
+            <ul v-if="documents.length" class="document-list">
+              <li v-for="document in documents" :key="document.id">
+                <button
+                  type="button"
+                  class="document-item-button"
+                  :class="{ active: selectedDocumentId === document.id }"
+                  @click="selectDocument(document.id)"
+                >
+                  <span class="document-name" :title="document.filename">{{ document.filename }}</span>
+                  <span class="document-meta">{{ document.chunk_count }} 片段 · {{ formatFileSize(document.size_bytes) }}</span>
+                </button>
+              </li>
+            </ul>
+
+            <section v-if="selectedDocumentId" class="document-detail-panel">
+              <template v-if="documentDetailLoading">
+                <p class="document-empty">正在读取文档详情...</p>
+              </template>
+              <template v-else-if="selectedDocument">
+                <header class="document-detail-header">
+                  <div>
+                    <strong :title="selectedDocument.filename">{{ selectedDocument.filename }}</strong>
+                    <span>{{ selectedDocument.chunk_count }} 片段 · {{ formatFileSize(selectedDocument.size_bytes) }}</span>
+                  </div>
+                  <button
+                    type="button"
+                    class="document-delete-btn"
+                    :disabled="documentDeleting"
+                    @click="handleDeleteDocument(selectedDocument.id)"
+                  >
+                    {{ documentDeleting ? "删除中..." : "删除" }}
+                  </button>
+                </header>
+                <p class="document-preview">{{ selectedDocument.summary || previewText(selectedDocument.raw_text) }}</p>
+                <div class="document-chunks">
+                  <button
+                    v-for="chunk in visibleDocumentChunks"
+                    :key="chunk.id"
+                    type="button"
+                    class="document-chunk"
+                    @click="toggleChunk(chunk.id)"
+                  >
+                    <span>片段 {{ chunk.chunk_index }}</span>
+                    <p>{{ expandedChunkIds.has(chunk.id) ? chunk.text : previewText(chunk.text) }}</p>
+                  </button>
+                </div>
+              </template>
+            </section>
+          </section>
           <div class="form-actions">
             <button class="submit" type="submit" :disabled="loading">
               <span class="submit-label">
@@ -123,12 +193,74 @@
           </div>
 
           <div class="info-item document-library">
-            <label>文档库</label>
-            <div class="document-dropzone" aria-disabled="true">
-              <strong>上传文档后续支持</strong>
-              <p>当前阶段仅预留 RAG 入口，研究流程会先跳过文档库检索。</p>
-              <button type="button" disabled>上传文档</button>
+            <div class="document-library-head">
+              <label>文档库</label>
+              <span>本次启动时 {{ researchDocumentCount }} 个文档可检索</span>
             </div>
+            <div class="document-dropzone" :class="{ muted: loading }">
+              <strong>{{ documents.length ? `${documents.length} 个文档在库` : "暂无文档" }}</strong>
+              <p>{{ sidebarDocumentHint }}</p>
+              <label class="upload-button" :class="{ disabled: uploadDisabled }">
+                <input
+                  type="file"
+                  accept=".txt,.md,text/plain,text/markdown"
+                  :disabled="uploadDisabled"
+                  @change="handleDocumentUpload"
+                />
+                {{ documentLoading ? "上传中..." : "选择文档" }}
+              </label>
+            </div>
+            <p v-if="documentSuccess" class="document-message success">{{ documentSuccess }}</p>
+            <p v-if="documentError" class="document-message error">{{ documentError }}</p>
+            <p v-if="!documents.length && !documentLoading" class="document-empty">暂无文档</p>
+            <ul v-if="documents.length" class="document-list">
+              <li v-for="document in documents" :key="document.id">
+                <button
+                  type="button"
+                  class="document-item-button"
+                  :class="{ active: selectedDocumentId === document.id }"
+                  @click="selectDocument(document.id)"
+                >
+                  <span class="document-name" :title="document.filename">{{ document.filename }}</span>
+                  <span class="document-meta">{{ document.chunk_count }} 片段 · {{ formatFileSize(document.size_bytes) }}</span>
+                </button>
+              </li>
+            </ul>
+
+            <section v-if="selectedDocumentId" class="document-detail-panel">
+              <template v-if="documentDetailLoading">
+                <p class="document-empty">正在读取文档详情...</p>
+              </template>
+              <template v-else-if="selectedDocument">
+                <header class="document-detail-header">
+                  <div>
+                    <strong :title="selectedDocument.filename">{{ selectedDocument.filename }}</strong>
+                    <span>{{ selectedDocument.chunk_count }} 片段 · {{ formatFileSize(selectedDocument.size_bytes) }}</span>
+                  </div>
+                  <button
+                    type="button"
+                    class="document-delete-btn"
+                    :disabled="documentDeleting"
+                    @click="handleDeleteDocument(selectedDocument.id)"
+                  >
+                    {{ documentDeleting ? "删除中..." : "删除" }}
+                  </button>
+                </header>
+                <p class="document-preview">{{ selectedDocument.summary || previewText(selectedDocument.raw_text) }}</p>
+                <div class="document-chunks">
+                  <button
+                    v-for="chunk in visibleDocumentChunks"
+                    :key="chunk.id"
+                    type="button"
+                    class="document-chunk"
+                    @click="toggleChunk(chunk.id)"
+                  >
+                    <span>片段 {{ chunk.chunk_index }}</span>
+                    <p>{{ expandedChunkIds.has(chunk.id) ? chunk.text : previewText(chunk.text) }}</p>
+                  </button>
+                </div>
+              </template>
+            </section>
           </div>
         </div>
 
@@ -430,10 +562,16 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, onBeforeUnmount, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 
 import {
+  deleteDocument,
+  getDocument,
+  listDocuments,
   runResearchStream,
+  uploadDocument,
+  type DocumentDetail,
+  type DocumentSummary,
   type ResearchStreamEvent
 } from "./services/api";
 
@@ -510,6 +648,17 @@ const summaryHighlight = ref(false);
 const sourcesHighlight = ref(false);
 const reportHighlight = ref(false);
 const toolHighlight = ref(false);
+
+const documents = ref<DocumentSummary[]>([]);
+const documentLoading = ref(false);
+const documentDetailLoading = ref(false);
+const documentDeleting = ref(false);
+const documentError = ref("");
+const documentSuccess = ref("");
+const researchDocumentCount = ref(0);
+const selectedDocumentId = ref<string | null>(null);
+const selectedDocument = ref<DocumentDetail | null>(null);
+const expandedChunkIds = ref<Set<string>>(new Set());
 
 let currentController: AbortController | null = null;
 
@@ -943,6 +1092,146 @@ function applyWorkflowGraph(payload: Record<string, unknown>) {
     .filter((edge) => edge.from && edge.to);
 }
 
+async function refreshDocuments() {
+  documentError.value = "";
+  try {
+    documents.value = await listDocuments();
+    if (
+      selectedDocumentId.value &&
+      !documents.value.some((item) => item.id === selectedDocumentId.value)
+    ) {
+      clearSelectedDocument();
+    }
+  } catch (err) {
+    documentError.value = err instanceof Error ? err.message : "读取文档库失败";
+  }
+}
+
+async function selectDocument(documentId: string) {
+  selectedDocumentId.value = documentId;
+  selectedDocument.value = null;
+  expandedChunkIds.value = new Set();
+  documentDetailLoading.value = true;
+  documentError.value = "";
+  try {
+    selectedDocument.value = await getDocument(documentId);
+  } catch (err) {
+    documentError.value = err instanceof Error ? err.message : "读取文档详情失败";
+  } finally {
+    documentDetailLoading.value = false;
+  }
+}
+
+async function handleDeleteDocument(documentId: string) {
+  const target = selectedDocument.value;
+  const filename = target?.filename ?? "该文档";
+  if (!window.confirm(`确定删除 ${filename}？删除后对应片段将不再参与 RAG 检索。`)) {
+    return;
+  }
+
+  documentDeleting.value = true;
+  documentError.value = "";
+  documentSuccess.value = "";
+  try {
+    await deleteDocument(documentId);
+    documents.value = documents.value.filter((item) => item.id !== documentId);
+    clearSelectedDocument();
+    documentSuccess.value = `已删除 ${filename}`;
+    await refreshDocuments();
+  } catch (err) {
+    documentError.value = err instanceof Error ? err.message : "删除文档失败";
+  } finally {
+    documentDeleting.value = false;
+  }
+}
+
+function clearSelectedDocument() {
+  selectedDocumentId.value = null;
+  selectedDocument.value = null;
+  expandedChunkIds.value = new Set();
+}
+
+function toggleChunk(chunkId: string) {
+  const next = new Set(expandedChunkIds.value);
+  if (next.has(chunkId)) {
+    next.delete(chunkId);
+  } else {
+    next.add(chunkId);
+  }
+  expandedChunkIds.value = next;
+}
+
+function previewText(value: string | null | undefined, maxLength = 180): string {
+  const compact = (value ?? "").replace(/\s+/g, " ").trim();
+  if (!compact) {
+    return "暂无可预览内容";
+  }
+  return compact.length > maxLength ? `${compact.slice(0, maxLength).trim()}...` : compact;
+}
+
+const visibleDocumentChunks = computed(() =>
+  selectedDocument.value ? selectedDocument.value.chunks.slice(0, 10) : []
+);
+
+const uploadDisabled = computed(() => documentLoading.value || (isExpanded.value && loading.value));
+const sidebarDocumentHint = computed(() => {
+  if (documentLoading.value) {
+    return "正在切块入库...";
+  }
+  if (loading.value) {
+    return "研究进行中暂不上传新文档；新增文档可在下一次研究前加入。";
+  }
+  return "可查看、删除文档；开始研究前上传的文档会参与本次 RAG 检索。";
+});
+
+async function handleDocumentUpload(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) {
+    return;
+  }
+
+  if (uploadDisabled.value) {
+    input.value = "";
+    return;
+  }
+
+  const suffix = file.name.split(".").pop()?.toLowerCase();
+  if (!suffix || !["txt", "md"].includes(suffix)) {
+    documentError.value = "仅支持 .txt 和 .md 文档";
+    input.value = "";
+    return;
+  }
+
+  documentLoading.value = true;
+  documentError.value = "";
+  documentSuccess.value = "";
+  try {
+    const document = await uploadDocument(file);
+    documents.value = [
+      document,
+      ...documents.value.filter((item) => item.id !== document.id)
+    ];
+    documentSuccess.value = `已上传 ${document.filename}，生成 ${document.chunk_count} 个片段`;
+    await selectDocument(document.id);
+  } catch (err) {
+    documentError.value = err instanceof Error ? err.message : "文档上传失败";
+  } finally {
+    documentLoading.value = false;
+    input.value = "";
+  }
+}
+
+function formatFileSize(size: number): string {
+  if (size < 1024) {
+    return `${size} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
 const handleSubmit = async () => {
   if (!form.topic.trim()) {
     error.value = "请输入研究主题";
@@ -954,6 +1243,7 @@ const handleSubmit = async () => {
     currentController = null;
   }
 
+  researchDocumentCount.value = documents.value.length;
   loading.value = true;
   error.value = "";
   isExpanded.value = true;
@@ -1281,6 +1571,10 @@ const startNewResearch = () => {
   form.topic = "";
   form.searchApi = "";
 };
+
+onMounted(() => {
+  void refreshDocuments();
+});
 
 onBeforeUnmount(() => {
   if (currentController) {
@@ -2775,6 +3069,36 @@ select:focus {
   margin-top: 4px;
 }
 
+.home-document-library {
+  margin-top: 4px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(248, 250, 252, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.document-library-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.document-library-head label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #64748b;
+}
+
+.document-library-head span {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .document-dropzone {
   border: 1px dashed rgba(59, 130, 246, 0.35);
   border-radius: 14px;
@@ -2795,17 +3119,210 @@ select:focus {
   line-height: 1.5;
 }
 
-.document-dropzone button {
+.document-dropzone.muted {
+  border-color: rgba(148, 163, 184, 0.32);
+  background: rgba(241, 245, 249, 0.74);
+}
+
+.upload-button {
   margin-top: 10px;
   width: 100%;
   border: none;
   border-radius: 12px;
   padding: 10px 12px;
-  background: rgba(148, 163, 184, 0.22);
-  color: #64748b;
-  cursor: not-allowed;
+  background: linear-gradient(135deg, #2563eb, #0f766e);
+  color: #ffffff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  box-sizing: border-box;
 }
 
+.upload-button input {
+  display: none;
+}
+
+.upload-button.disabled {
+  opacity: 0.62;
+  cursor: wait;
+}
+
+.document-message {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+}
+
+.document-message.success {
+  background: rgba(220, 252, 231, 0.78);
+  color: #166534 !important;
+}
+
+.document-message.error {
+  background: rgba(254, 226, 226, 0.78);
+  color: #991b1b !important;
+}
+
+.document-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.document-list li {
+  display: flex;
+}
+
+.document-empty {
+  margin: 0;
+  color: #64748b !important;
+  font-size: 12px !important;
+}
+
+.document-item-button {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.76);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.document-item-button:hover,
+.document-item-button.active {
+  background: rgba(219, 234, 254, 0.72);
+  border-color: rgba(59, 130, 246, 0.36);
+}
+
+.document-item-button.active {
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+}
+
+.document-name {
+  max-width: 100%;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-meta {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.document-detail-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.86);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+}
+
+.document-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.document-detail-header div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.document-detail-header strong {
+  color: #0f172a;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-detail-header span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.document-delete-btn {
+  flex: 0 0 auto;
+  border: 1px solid rgba(239, 68, 68, 0.24);
+  border-radius: 10px;
+  padding: 6px 9px;
+  background: rgba(254, 226, 226, 0.72);
+  color: #991b1b;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.document-delete-btn:disabled {
+  opacity: 0.62;
+  cursor: wait;
+}
+
+.document-preview {
+  margin: 0;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #334155 !important;
+  font-size: 12px !important;
+  line-height: 1.55 !important;
+  word-break: break-word;
+}
+
+.document-chunks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.document-chunk {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 10px;
+  padding: 9px 10px;
+  background: rgba(255, 255, 255, 0.78);
+  text-align: left;
+  cursor: pointer;
+}
+
+.document-chunk span {
+  display: block;
+  margin-bottom: 4px;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.document-chunk p {
+  margin: 0;
+  color: #334155 !important;
+  font-size: 12px !important;
+  line-height: 1.55 !important;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .sidebar-actions {
   display: flex;
   flex-direction: column;

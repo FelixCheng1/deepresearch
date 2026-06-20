@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, create_engine
+from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
@@ -68,7 +68,7 @@ class ResearchTaskRow(Base):
 
 
 class ResearchSourceRow(Base):
-    """网页来源快照。"""
+    """网页或文档来源快照。"""
 
     __tablename__ = "research_sources"
 
@@ -102,6 +102,49 @@ class ResearchReportRow(Base):
     note_path: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     run: Mapped[ResearchRunRow] = relationship(back_populates="report")
+
+
+class DocumentRow(Base):
+    """上传到文档库的文本文件。"""
+
+    __tablename__ = "documents"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    filename: Mapped[str] = mapped_column(Text, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False, default="text/plain")
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    raw_text: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    chunks: Mapped[list[DocumentChunkRow]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+        order_by="DocumentChunkRow.chunk_index",
+    )
+
+
+class DocumentChunkRow(Base):
+    """上传文档的文本片段。"""
+
+    __tablename__ = "document_chunks"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    document_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    chunk_metadata: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
+
+    document: Mapped[DocumentRow] = relationship(back_populates="chunks")
 
 
 def create_database_engine(database_url: str) -> Engine:
