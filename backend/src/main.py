@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from config import Configuration, SearchAPI
 from agent import DeepResearchAgent
+from services.repository import create_research_repository
 
 # 添加控制台日志处理程序
 logger.add(
@@ -118,6 +119,24 @@ def create_app() -> FastAPI:
     def health_check() -> Dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/research/runs")
+    def list_research_runs(limit: int = 20) -> Dict[str, Any]:
+        """列出最近的研究历史。"""
+
+        config = Configuration.from_env()
+        repository = create_research_repository(config)
+        return {"runs": repository.list_runs(limit=limit)}
+
+    @app.get("/research/runs/{run_id}")
+    def get_research_run(run_id: str) -> Dict[str, Any]:
+        """读取一次研究运行的完整快照。"""
+
+        config = Configuration.from_env()
+        repository = create_research_repository(config)
+        run = repository.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="未找到研究历史")
+        return run
     @app.post("/research", response_model=ResearchResponse)
     def run_research(payload: ResearchRequest) -> ResearchResponse:
         try:
@@ -196,3 +215,5 @@ if __name__ == "__main__":
         reload=reload_enabled,
         log_level="info"
     )
+
+

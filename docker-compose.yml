@@ -1,0 +1,20 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: deepresearch-postgres
+    environment:
+      POSTGRES_USER: deepresearch
+      POSTGRES_PASSWORD: deepresearch
+      POSTGRES_DB: deepresearch
+    ports:
+      - "5432:5432"
+    volumes:
+      - deepresearch-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deepresearch -d deepresearch"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  deepresearch-postgres-data:

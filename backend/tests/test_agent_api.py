@@ -276,3 +276,25 @@ def test_fastapi_research_endpoint_with_mock_agent(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["report_markdown"] == "report"
+
+
+def test_fastapi_research_runs_endpoints(monkeypatch):
+    repo = InMemoryResearchRepository()
+    repo.save_run(agent_module.ResearchRun(id="run-api", topic="topic", search_api="duckduckgo"))
+    repo.save_report(agent_module.ResearchReport(run_id="run-api", markdown="# 报告"))
+
+    monkeypatch.setattr(main_module, "create_research_repository", lambda config: repo)
+    app = main_module.create_app()
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(app)
+    list_response = client.get("/research/runs")
+    detail_response = client.get("/research/runs/run-api")
+    missing_response = client.get("/research/runs/missing")
+
+    assert list_response.status_code == 200
+    assert list_response.json()["runs"][0]["id"] == "run-api"
+    assert detail_response.status_code == 200
+    assert detail_response.json()["report"]["markdown"] == "# 报告"
+    assert missing_response.status_code == 404

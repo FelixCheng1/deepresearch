@@ -23,7 +23,7 @@ from services.graph import build_research_graph, build_task_graph, send_task
 from services.llm import create_chat_model
 from services.note_store import NoteStore
 from services.planner import PlanningService
-from services.repository import InMemoryResearchRepository, ResearchRepository
+from services.repository import ResearchRepository, create_research_repository
 from services.reporter import ReportingService
 from services.retriever import DisabledRetriever, Retriever
 from services.search import dispatch_search, prepare_research_context
@@ -68,7 +68,7 @@ class DeepResearchAgent:
             if self.config.enable_notes
             else None
         )
-        self.repository = repository or InMemoryResearchRepository()
+        self.repository = repository or create_research_repository(self.config)
         self.retriever = retriever or DisabledRetriever(self.config)
         self._tool_tracker = ToolCallTracker(
             self.config.notes_workspace if self.config.enable_notes else None
@@ -832,3 +832,4 @@ def run_deep_research(topic: str, config: Configuration | None = None) -> Summar
 
     agent = DeepResearchAgent(config=config)
     return agent.run(topic)
+

@@ -5,8 +5,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from config import Configuration
 from models import ResearchReport, ResearchRun, ResearchSource, ResearchTask
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from services.database import Base
 from services.note_store import NoteStore
-from services.repository import InMemoryResearchRepository
+from services.repository import InMemoryResearchRepository, PostgresResearchRepository, create_research_repository
 from services.retriever import DisabledRetriever
 from helpers import make_notes_dir
 
@@ -69,3 +73,65 @@ def test_disabled_retriever_returns_empty_context():
 
     assert retriever.retrieve("query") == []
     assert retriever.calls == ["query"]
+
+
+def test_repository_factory_uses_memory_without_database_url():
+    repo = create_research_repository(Configuration(database_url=None))
+
+    assert isinstance(repo, InMemoryResearchRepository)
+
+
+def test_sqlalchemy_repository_saves_and_reads_history():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    repo = PostgresResearchRepository(
+        session_factory=sessionmaker(bind=engine, expire_on_commit=False, future=True)
+    )
+
+    repo.save_run(ResearchRun(id="run-db", topic="数据库", search_api="duckduckgo"))
+    repo.save_task(
+        ResearchTask(
+            run_id="run-db",
+            task_id=1,
+            title="背景",
+            intent="了解背景",
+            query="database background",
+            status="in_progress",
+            note_id="note-1",
+            note_path="notes/note-1.md",
+        )
+    )
+    repo.save_task(
+        ResearchTask(
+            run_id="run-db",
+            task_id=1,
+            title="背景",
+            intent="了解背景",
+            query="database background",
+            status="completed",
+            note_id="note-1",
+            note_path="notes/note-1.md",
+        )
+    )
+    repo.save_source(
+        ResearchSource(
+            run_id="run-db",
+            task_id=1,
+            title="Source",
+            url="https://example.com",
+            content="content",
+        )
+    )
+    repo.save_report(ResearchReport(run_id="run-db", markdown="# 报告", note_id="report-1"))
+
+    runs = repo.list_runs()
+    detail = repo.get_run("run-db")
+
+    assert runs[0]["id"] == "run-db"
+    assert detail is not None
+    assert detail["topic"] == "数据库"
+    assert detail["tasks"][0]["status"] == "completed"
+    assert len(detail["tasks"]) == 1
+    assert detail["sources"][0]["url"] == "https://example.com"
+    assert detail["report"]["markdown"] == "# 报告"
+
