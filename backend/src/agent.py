@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import queue
 import re
+import threading
 from typing import Any, Iterator
 from uuid import uuid4
 
@@ -17,7 +19,7 @@ from models import (
     SummaryStateOutput,
     TodoItem,
 )
-from services.graph import build_research_graph
+from services.graph import build_research_graph, build_task_graph, send_task
 from services.llm import create_chat_model
 from services.note_store import NoteStore
 from services.planner import PlanningService
@@ -33,7 +35,8 @@ logger = logging.getLogger(__name__)
 
 WORKFLOW_LABELS = {
     "plan_tasks": "规划研究任务",
-    "select_next_task": "选择下一个任务",
+    "dispatch_tasks": "分发并行任务",
+    "join_tasks": "汇总任务结果",
     "prepare_task": "准备任务",
     "retrieve_documents": "检索文档库",
     "search_web": "搜索网页资料",
@@ -72,10 +75,14 @@ class DeepResearchAgent:
         )
         self.run_id = uuid4().hex
         self._streaming = False
+        self._event_queue: queue.Queue[dict[str, Any]] | None = None
+        self._shared_lock = threading.Lock()
+        self.max_parallel_tasks = 3
 
         self.planner = PlanningService(self.llm, self.config)
         self.summarizer = SummarizationService(lambda: self.llm, self.config)
         self.reporting = ReportingService(self.llm, self.config)
+        self.task_graph = build_task_graph()
         self.graph = build_research_graph()
 
     # ------------------------------------------------------------------
@@ -85,7 +92,7 @@ class DeepResearchAgent:
         """执行研究工作流并返回最终报告。"""
 
         state = SummaryState(research_topic=topic)
-        result = self.graph.invoke({"agent": self, "state": state})
+        result = self.graph.invoke({"agent": self, "state": state, "task_cursor": 0, "task_results": []})
         state = result["state"]
 
         return SummaryStateOutput(
@@ -99,21 +106,38 @@ class DeepResearchAgent:
 
         state = SummaryState(research_topic=topic)
         self._streaming = True
+        self._event_queue = queue.Queue()
         self._emit_event(state, {"type": "status", "message": "初始化研究流程"})
 
-        try:
-            for chunk in self.graph.stream({"agent": self, "state": state}):
-                state = self._state_from_graph_chunk(chunk, state)
-                yield from self._pop_stream_events(state)
-        except Exception as exc:
-            logger.exception("Streaming research failed")
-            yield from self._pop_stream_events(state)
-            yield {"type": "error", "detail": str(exc)}
-            return
-        finally:
-            self._streaming = False
+        error_holder: dict[str, Exception] = {}
 
-        yield from self._pop_stream_events(state)
+        def run_graph() -> None:
+            try:
+                self.graph.invoke(
+                    {"agent": self, "state": state, "task_cursor": 0, "task_results": []}
+                )
+            except Exception as exc:  # pragma: no cover - 外层会把异常转成 SSE
+                logger.exception("Streaming research failed")
+                error_holder["error"] = exc
+
+        worker = threading.Thread(target=run_graph, name="research-langgraph-stream", daemon=True)
+        worker.start()
+
+        try:
+            while worker.is_alive() or (self._event_queue and not self._event_queue.empty()):
+                try:
+                    yield self._event_queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+
+            if "error" in error_holder:
+                yield {"type": "error", "detail": str(error_holder["error"])}
+                return
+        finally:
+            worker.join(timeout=0.2)
+            self._streaming = False
+            self._event_queue = None
+
         yield {"type": "done"}
 
     # ------------------------------------------------------------------
@@ -161,62 +185,91 @@ class DeepResearchAgent:
                 "step": 0,
             },
         )
+        self._emit_event(state, self._workflow_graph_event(state))
         self._workflow(state, "plan_tasks", "completed", detail=f"生成 {len(state.todo_items)} 个任务")
-        return {"state": state}
+        return {"state": state, "task_cursor": 0, "task_results": []}
 
-    def _graph_select_next_task(self, payload: dict[str, Any]) -> dict[str, SummaryState]:
+    def _graph_dispatch_tasks(self, payload: dict[str, Any]) -> dict[str, Any]:
         state = payload["state"]
-        self._workflow(state, "select_next_task", "in_progress")
-        task = self._current_task(state)
-        if task is None:
-            self._workflow(state, "select_next_task", "skipped", detail="没有待执行任务")
-            return {"state": state}
+        cursor = int(payload.get("task_cursor") or 0)
+        remaining = max(0, len(state.todo_items) - cursor)
+        batch_size = min(self.max_parallel_tasks, remaining)
+        if batch_size:
+            detail = f"并行分发 {batch_size} 个任务"
+            self._workflow(state, "dispatch_tasks", "in_progress", detail=detail)
+            self._workflow(state, "dispatch_tasks", "completed", detail=detail)
+        else:
+            detail = "没有待分发任务"
+            self._workflow(state, "dispatch_tasks", "skipped", detail=detail)
+        return {}
 
-        state.current_task_id = task.id
-        state.current_context = ""
-        state.current_sources_summary = ""
-        state.current_search_result = None
-        state.current_answer_text = None
-        state.current_search_backend = None
-        state.current_retrieval_context = ""
-        self._workflow(
-            state,
-            "select_next_task",
-            "completed",
-            task=task,
-            detail=f"当前任务：{task.title}",
-        )
-        return {"state": state}
-
-    def _graph_prepare_task(self, payload: dict[str, Any]) -> dict[str, SummaryState]:
+    def _graph_route_task_batch(self, payload: dict[str, Any]) -> list[Any] | str:
         state = payload["state"]
-        task = self._current_task(state)
-        if task is None:
-            return {"state": state}
+        cursor = int(payload.get("task_cursor") or 0)
+        batch = state.todo_items[cursor : cursor + self.max_parallel_tasks]
+        if not batch:
+            return "join_tasks"
+
+        return [
+            send_task(
+                "run_task",
+                {
+                    "agent": self,
+                    "state": state,
+                    "task": task,
+                    "task_index": cursor + offset,
+                },
+            )
+            for offset, task in enumerate(batch)
+        ]
+
+    def _graph_run_task(self, payload: dict[str, Any]) -> dict[str, list[TodoItem]]:
+        state = payload["state"]
+        task = payload["task"]
+        try:
+            result = self.task_graph.invoke(payload)
+            task = result.get("task", task)
+        except Exception as exc:
+            logger.exception("Task %s failed", task.id)
+            task.status = "skipped"
+            task.summary = f"任务执行失败：{exc}"
+            self._workflow(state, "persist_task", "failed", task=task, detail=str(exc))
+            self._emit_task_status(state, task)
+        return {"task_results": [task]}
+
+    def _graph_join_tasks(self, payload: dict[str, Any]) -> dict[str, Any]:
+        state = payload["state"]
+        results = payload.get("task_results") or []
+        if results:
+            by_id = {task.id: task for task in results}
+            state.todo_items = [by_id.get(task.id, task) for task in state.todo_items]
+
+        unique_done = {task.id for task in results}
+        cursor = min(len(unique_done), len(state.todo_items))
+        detail = f"已汇总 {cursor} / {len(state.todo_items)} 个任务"
+        self._workflow(state, "join_tasks", "completed", detail=detail)
+        return {"state": state, "task_cursor": cursor}
+
+    def _graph_after_join(self, payload: dict[str, Any]) -> str:
+        state = payload["state"]
+        cursor = int(payload.get("task_cursor") or 0)
+        if cursor < len(state.todo_items):
+            return "dispatch_tasks"
+        return "write_report"
+
+    def _task_prepare_task(self, payload: dict[str, Any]) -> dict[str, Any]:
+        state = payload["state"]
+        task = payload["task"]
 
         self._workflow(state, "prepare_task", "in_progress", task=task)
         task.status = "in_progress"
-        self._emit_event(
-            state,
-            {
-                "type": "task_status",
-                "task_id": task.id,
-                "status": "in_progress",
-                "title": task.title,
-                "intent": task.intent,
-                "query": task.query,
-                "note_id": task.note_id,
-                "note_path": task.note_path,
-                "step": self._step_for_task(state, task),
-                "stream_token": task.stream_token,
-            },
-        )
+        self._emit_task_status(state, task)
         self._workflow(state, "prepare_task", "completed", task=task)
-        return {"state": state}
+        return {"task": task}
 
-    def _graph_should_retrieve(self, payload: dict[str, Any]) -> str:
+    def _task_should_retrieve(self, payload: dict[str, Any]) -> str:
         state = payload["state"]
-        task = self._current_task(state)
+        task = payload["task"]
         if not self.config.rag_enabled:
             self._workflow(
                 state,
@@ -228,41 +281,34 @@ class DeepResearchAgent:
             return "search_web"
         return "retrieve_documents"
 
-    def _graph_retrieve_documents(self, payload: dict[str, Any]) -> dict[str, SummaryState]:
+    def _task_retrieve_documents(self, payload: dict[str, Any]) -> dict[str, Any]:
         state = payload["state"]
-        task = self._current_task(state)
-        if task is None:
-            return {"state": state}
+        task = payload["task"]
 
         self._workflow(state, "retrieve_documents", "in_progress", task=task)
         chunks = self.retriever.retrieve(task.query)
         if chunks:
-            state.current_retrieval_context = "\n\n".join(chunk.text for chunk in chunks)
+            retrieval_context = "\n\n".join(chunk.text for chunk in chunks)
             detail = f"找到 {len(chunks)} 个文档片段"
             status = "completed"
         else:
-            state.current_retrieval_context = ""
+            retrieval_context = ""
             detail = "未找到可用文档片段"
             status = "skipped"
         self._workflow(state, "retrieve_documents", status, task=task, detail=detail)
-        return {"state": state}
+        return {"retrieval_context": retrieval_context}
 
-    def _graph_search_web(self, payload: dict[str, Any]) -> dict[str, SummaryState]:
+    def _task_search_web(self, payload: dict[str, Any]) -> dict[str, Any]:
         state = payload["state"]
-        task = self._current_task(state)
-        if task is None:
-            return {"state": state}
+        task = payload["task"]
 
         self._workflow(state, "search_web", "in_progress", task=task)
         search_result, notices, answer_text, backend = dispatch_search(
             task.query,
             self.config,
-            state.research_loop_count,
+            self._step_for_task(state, task) - 1,
         )
         task.notices = notices
-        state.current_search_result = search_result
-        state.current_answer_text = answer_text
-        state.current_search_backend = backend
 
         for notice in notices:
             if notice:
@@ -279,23 +325,23 @@ class DeepResearchAgent:
         if not search_result or not search_result.get("results"):
             task.status = "skipped"
             self._workflow(state, "search_web", "skipped", task=task, detail="没有获得搜索结果")
-            return {"state": state}
+            return {"task": task, "search_context": ""}
 
         sources_summary, context = prepare_research_context(
             search_result,
             answer_text,
             self.config,
         )
-        if state.current_retrieval_context:
-            context = f"历史/文档检索上下文：\n{state.current_retrieval_context}\n\n{context}"
+        retrieval_context = payload.get("retrieval_context") or ""
+        if retrieval_context:
+            context = f"历史/文档检索上下文：\n{retrieval_context}\n\n{context}"
 
         task.sources_summary = sources_summary
-        state.current_sources_summary = sources_summary
-        state.current_context = context
-        state.web_research_results.append(context)
-        state.sources_gathered.append(sources_summary)
-        state.research_loop_count += 1
-        self._save_sources(task, search_result)
+        with self._shared_lock:
+            state.web_research_results.append(context)
+            state.sources_gathered.append(sources_summary)
+            state.research_loop_count += 1
+            self._save_sources(task, search_result)
 
         self._emit_event(
             state,
@@ -312,25 +358,24 @@ class DeepResearchAgent:
             },
         )
         self._workflow(state, "search_web", "completed", task=task, detail=f"使用 {backend} 完成搜索")
-        return {"state": state}
+        return {"task": task, "search_context": context}
 
-    def _graph_summarize_task(self, payload: dict[str, Any]) -> dict[str, SummaryState]:
+    def _task_summarize_task(self, payload: dict[str, Any]) -> dict[str, Any]:
         state = payload["state"]
-        task = self._current_task(state)
-        if task is None:
-            return {"state": state}
+        task = payload["task"]
 
         if task.status == "skipped":
             task.summary = "暂无可用信息"
             self._workflow(state, "summarize_task", "skipped", task=task, detail="任务已跳过")
-            return {"state": state}
+            return {"task": task}
 
         self._workflow(state, "summarize_task", "in_progress", task=task)
+        context = payload.get("search_context") or ""
         if self._streaming:
             summary_stream, summary_getter = self.summarizer.stream_task_summary(
                 state,
                 task,
-                state.current_context,
+                context,
             )
             for chunk in summary_stream:
                 if chunk:
@@ -347,48 +392,25 @@ class DeepResearchAgent:
                     )
             summary_text = summary_getter()
         else:
-            summary_text = self.summarizer.summarize_task(state, task, state.current_context)
+            summary_text = self.summarizer.summarize_task(state, task, context)
 
         task.summary = summary_text.strip() if summary_text else "暂无可用信息"
         task.status = "completed"
         self._workflow(state, "summarize_task", "completed", task=task)
-        return {"state": state}
+        return {"task": task}
 
-    def _graph_persist_task(self, payload: dict[str, Any]) -> dict[str, SummaryState]:
+    def _task_persist_task(self, payload: dict[str, Any]) -> dict[str, Any]:
         state = payload["state"]
-        task = self._current_task(state)
-        if task is None:
-            return {"state": state}
+        task = payload["task"]
 
         self._workflow(state, "persist_task", "in_progress", task=task)
-        self._update_task_note(task)
-        self.repository.save_task(self._task_snapshot(task))
-        self._emit_events(state, self._drain_tool_events(state, step=self._step_for_task(state, task)))
-        self._emit_event(
-            state,
-            {
-                "type": "task_status",
-                "task_id": task.id,
-                "status": task.status,
-                "summary": task.summary,
-                "sources_summary": task.sources_summary,
-                "title": task.title,
-                "intent": task.intent,
-                "note_id": task.note_id,
-                "note_path": task.note_path,
-                "step": self._step_for_task(state, task),
-                "stream_token": task.stream_token,
-            },
-        )
+        with self._shared_lock:
+            self._update_task_note(task)
+            self.repository.save_task(self._task_snapshot(task))
+            self._emit_events(state, self._drain_tool_events(state, step=self._step_for_task(state, task)))
+        self._emit_task_status(state, task)
         self._workflow(state, "persist_task", "completed", task=task)
-        state.current_task_index += 1
-        return {"state": state}
-
-    def _graph_should_continue(self, payload: dict[str, Any]) -> str:
-        state = payload["state"]
-        if state.current_task_index < len(state.todo_items):
-            return "select_next_task"
-        return "write_report"
+        return {"task": task}
 
     def _graph_write_report(self, payload: dict[str, Any]) -> dict[str, SummaryState]:
         state = payload["state"]
@@ -442,11 +464,15 @@ class DeepResearchAgent:
         task: TodoItem | None = None,
         detail: str | None = None,
     ) -> None:
+        node_id = self._workflow_node_id(node, task)
         event: dict[str, Any] = {
             "type": "workflow_node",
+            "node_id": node_id,
             "node": node,
+            "scope": "task" if task is not None else "global",
             "status": status,
             "label": WORKFLOW_LABELS.get(node, node),
+            "depends_on": self._workflow_depends_on(node, task),
         }
         if task is not None:
             event["task_id"] = task.id
@@ -457,26 +483,128 @@ class DeepResearchAgent:
         self._emit_event(state, event)
 
     def _emit_event(self, state: SummaryState, event: dict[str, Any]) -> None:
+        if self._streaming and self._event_queue is not None:
+            self._event_queue.put(event)
+            return
         state.stream_events.append(event)
 
     def _emit_events(self, state: SummaryState, events: list[dict[str, Any]]) -> None:
         for event in events:
             self._emit_event(state, event)
 
-    def _pop_stream_events(self, state: SummaryState) -> Iterator[dict[str, Any]]:
-        while state.stream_events:
-            yield state.stream_events.pop(0)
+    def _emit_task_status(self, state: SummaryState, task: TodoItem) -> None:
+        """统一输出前端兼容的任务状态事件。"""
 
-    def _state_from_graph_chunk(self, chunk: dict[str, Any], fallback: SummaryState) -> SummaryState:
-        for value in chunk.values():
-            if isinstance(value, dict) and isinstance(value.get("state"), SummaryState):
-                return value["state"]
-        return fallback
+        self._emit_event(
+            state,
+            {
+                "type": "task_status",
+                "task_id": task.id,
+                "status": task.status,
+                "summary": task.summary,
+                "sources_summary": task.sources_summary,
+                "title": task.title,
+                "intent": task.intent,
+                "query": task.query,
+                "note_id": task.note_id,
+                "note_path": task.note_path,
+                "step": self._step_for_task(state, task),
+                "stream_token": task.stream_token,
+            },
+        )
 
-    def _current_task(self, state: SummaryState) -> TodoItem | None:
-        if state.current_task_index < 0 or state.current_task_index >= len(state.todo_items):
-            return None
-        return state.todo_items[state.current_task_index]
+    def _workflow_node_id(self, node: str, task: TodoItem | None = None) -> str:
+        if task is None:
+            return f"global:{node}"
+        return f"task:{task.id}:{node}"
+
+    def _workflow_depends_on(self, node: str, task: TodoItem | None = None) -> list[str]:
+        if task is None:
+            mapping = {
+                "dispatch_tasks": ["global:plan_tasks"],
+                "join_tasks": [f"task:{item.id}:persist_task" for item in getattr(self, "_last_tasks", [])],
+                "write_report": ["global:join_tasks"],
+                "persist_report": ["global:write_report"],
+            }
+            return mapping.get(node, [])
+
+        mapping = {
+            "prepare_task": ["global:dispatch_tasks"],
+            "retrieve_documents": [self._workflow_node_id("prepare_task", task)],
+            "search_web": [
+                self._workflow_node_id("prepare_task", task),
+                self._workflow_node_id("retrieve_documents", task),
+            ],
+            "summarize_task": [self._workflow_node_id("search_web", task)],
+            "persist_task": [self._workflow_node_id("summarize_task", task)],
+        }
+        return mapping.get(node, [])
+
+    def _workflow_graph_event(self, state: SummaryState) -> dict[str, Any]:
+        """生成前端绘制 DAG/泳道图所需的拓扑。"""
+
+        self._last_tasks = list(state.todo_items)
+        nodes: list[dict[str, Any]] = [
+            self._workflow_graph_node("global:plan_tasks", "plan_tasks", "规划研究任务", "global"),
+            self._workflow_graph_node("global:dispatch_tasks", "dispatch_tasks", "分发并行任务", "global"),
+            self._workflow_graph_node("global:join_tasks", "join_tasks", "汇总任务结果", "global"),
+            self._workflow_graph_node("global:write_report", "write_report", "撰写最终报告", "global"),
+            self._workflow_graph_node("global:persist_report", "persist_report", "保存最终报告", "global"),
+        ]
+        edges: list[dict[str, str]] = [
+            {"from": "global:plan_tasks", "to": "global:dispatch_tasks"},
+            {"from": "global:join_tasks", "to": "global:write_report"},
+            {"from": "global:write_report", "to": "global:persist_report"},
+        ]
+
+        for task in state.todo_items:
+            task_nodes = [
+                ("prepare_task", "准备任务"),
+                ("retrieve_documents", "检索文档库"),
+                ("search_web", "搜索网页资料"),
+                ("summarize_task", "总结任务发现"),
+                ("persist_task", "保存任务状态"),
+            ]
+            for node, label in task_nodes:
+                nodes.append(
+                    self._workflow_graph_node(
+                        self._workflow_node_id(node, task),
+                        node,
+                        label,
+                        "task",
+                        task=task,
+                    )
+                )
+
+            first = self._workflow_node_id("prepare_task", task)
+            nodes_for_edges = [self._workflow_node_id(node, task) for node, _ in task_nodes]
+            edges.append({"from": "global:dispatch_tasks", "to": first})
+            for source, target in zip(nodes_for_edges, nodes_for_edges[1:]):
+                edges.append({"from": source, "to": target})
+            edges.append({"from": nodes_for_edges[-1], "to": "global:join_tasks"})
+
+        return {"type": "workflow_graph", "nodes": nodes, "edges": edges}
+
+    def _workflow_graph_node(
+        self,
+        node_id: str,
+        node: str,
+        label: str,
+        scope: str,
+        *,
+        task: TodoItem | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "id": node_id,
+            "node": node,
+            "label": label,
+            "scope": scope,
+            "status": "pending",
+        }
+        if task is not None:
+            payload["task_id"] = task.id
+            payload["task_title"] = task.title
+        return payload
 
     def _step_for_task(self, state: SummaryState, task: TodoItem) -> int:
         try:

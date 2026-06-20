@@ -175,102 +175,184 @@
         </div>
 
         <div class="result-workbench">
-          <section class="workflow-panel">
-            <div class="workflow-panel-header">
-              <div>
-                <h3>LangGraph 节点进度</h3>
-                <p>{{ completedWorkflowNodes }} / {{ workflowNodes.length || defaultWorkflowNodes.length }} 节点完成</p>
-              </div>
-            </div>
-            <ul class="workflow-list">
-              <li
-                v-for="node in visibleWorkflowNodes"
-                :key="node.node"
-                :class="['workflow-node-item', node.status]"
-              >
-                <span class="workflow-node-dot"></span>
-                <div>
-                  <strong>{{ node.label }}</strong>
-                  <p>{{ node.detail || formatWorkflowStatus(node.status) }}</p>
-                </div>
-              </li>
-            </ul>
-          </section>
-
           <div class="content-column">
-        <div class="tasks-section" v-if="todoTasks.length">
-          <aside class="tasks-list">
-            <h3>任务清单</h3>
-            <ul>
-              <li
-                v-for="task in todoTasks"
-                :key="task.id"
-                :class="['task-item', { active: task.id === activeTaskId, completed: task.status === 'completed' }]"
-              >
-                <button
-                  type="button"
-                  class="task-button"
-                  @click="activeTaskId = task.id"
-                >
-                  <span class="task-title">{{ task.title }}</span>
-                  <span class="task-status" :class="task.status">
-                    {{ formatTaskStatus(task.status) }}
-                  </span>
-                </button>
-                <p class="task-intent">{{ task.intent }}</p>
-              </li>
-            </ul>
-          </aside>
-
-          <article class="task-detail" v-if="currentTask">
-            <header class="task-header">
-              <div>
-                <h3>{{ currentTaskTitle || "当前任务" }}</h3>
-                <p class="muted" v-if="currentTaskIntent">
-                  {{ currentTaskIntent }}
-                </p>
+            <section class="workflow-panel">
+              <div class="workflow-panel-header">
+                <div>
+                  <h3>LangGraph 并行工作流</h3>
+                  <p>{{ completedWorkflowNodes }} / {{ visibleWorkflowNodes.length }} 节点完成 · {{ workflowEdges.length }} 条边</p>
+                </div>
               </div>
-              <div class="task-chip-group">
-                <span class="task-label">查询：{{ currentTaskQuery || "" }}</span>
-                <span
-                  v-if="currentTaskNoteId"
-                  class="task-label note-chip"
-                  :title="currentTaskNoteId"
-                >
-                  笔记：{{ currentTaskNoteId }}
-                </span>
-                <span
-                  v-if="currentTaskNotePath"
-                  class="task-label note-chip path-chip"
-                  :title="currentTaskNotePath"
-                >
-                  <span class="path-label">路径：</span>
-                  <span class="path-text">{{ currentTaskNotePath }}</span>
+              <div class="workflow-map" role="list" aria-label="LangGraph 节点图">
+                <div class="workflow-global-row">
                   <button
-                    class="chip-action"
+                    v-for="node in globalWorkflowNodes"
+                    :key="node.key"
                     type="button"
-                    @click="copyNotePath(currentTaskNotePath)"
+                    :class="['graph-node', node.status, { selected: node.id === selectedWorkflowNodeId }]"
+                    @click="selectedWorkflowNodeId = node.id"
                   >
-                    复制
+                    <span class="graph-node-dot"></span>
+                    <strong>{{ node.label }}</strong>
+                    <small>{{ node.detail || formatWorkflowStatus(node.status) }}</small>
                   </button>
-                </span>
-              </div>
-            </header>
+                </div>
 
-            <section v-if="currentTask && currentTask.notices.length" class="task-notices">
-              <h4>系统提示</h4>
-              <ul>
-                <li v-for="(notice, idx) in currentTask.notices" :key="`${notice}-${idx}`">
-                  {{ notice }}
-                </li>
-              </ul>
+                <div class="workflow-lanes" v-if="taskWorkflowRows.length">
+                  <section
+                    v-for="row in taskWorkflowRows"
+                    :key="row.task.id"
+                    class="workflow-lane"
+                  >
+                    <button
+                      type="button"
+                      class="workflow-lane-label"
+                      @click="activeTaskId = row.task.id"
+                    >
+                      <span>任务 {{ row.task.id }}</span>
+                      <strong>{{ row.task.title }}</strong>
+                    </button>
+                    <div class="workflow-lane-nodes">
+                      <button
+                        v-for="node in row.nodes"
+                        :key="node.key"
+                        type="button"
+                        :class="['graph-node', 'task-node', node.status, { selected: node.id === selectedWorkflowNodeId }]"
+                        @click="selectedWorkflowNodeId = node.id; activeTaskId = node.taskId"
+                      >
+                        <span class="graph-node-dot"></span>
+                        <strong>{{ node.label }}</strong>
+                        <small>{{ node.detail || formatWorkflowStatus(node.status) }}</small>
+                      </button>
+                    </div>
+                  </section>
+                </div>
+
+                <div class="workflow-global-row report-row">
+                  <button
+                    v-for="node in reportWorkflowNodes"
+                    :key="node.key"
+                    type="button"
+                    :class="['graph-node', node.status, { selected: node.id === selectedWorkflowNodeId }]"
+                    @click="selectedWorkflowNodeId = node.id"
+                  >
+                    <span class="graph-node-dot"></span>
+                    <strong>{{ node.label }}</strong>
+                    <small>{{ node.detail || formatWorkflowStatus(node.status) }}</small>
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <div class="tasks-section" v-if="todoTasks.length">
+              <aside class="tasks-list">
+                <h3>任务清单</h3>
+                <ul>
+                  <li
+                    v-for="task in todoTasks"
+                    :key="task.id"
+                    :class="['task-item', { active: task.id === activeTaskId, completed: task.status === 'completed' }]"
+                  >
+                    <button
+                      type="button"
+                      class="task-button"
+                      @click="activeTaskId = task.id"
+                    >
+                      <span class="task-title">{{ task.title }}</span>
+                      <span class="task-status" :class="task.status">
+                        {{ formatTaskStatus(task.status) }}
+                      </span>
+                    </button>
+                    <p class="task-intent">{{ task.intent }}</p>
+                  </li>
+                </ul>
+              </aside>
+
+              <article class="task-detail" v-if="currentTask">
+                <header class="task-header">
+                  <div>
+                    <h3>{{ currentTaskTitle || "当前任务" }}</h3>
+                    <p class="muted" v-if="currentTaskIntent">
+                      {{ currentTaskIntent }}
+                    </p>
+                  </div>
+                  <div class="task-chip-group">
+                    <span class="task-label">查询：{{ currentTaskQuery || "" }}</span>
+                    <span
+                      v-if="currentTaskNoteId"
+                      class="task-label note-chip"
+                      :title="currentTaskNoteId"
+                    >
+                      笔记：{{ currentTaskNoteId }}
+                    </span>
+                    <span
+                      v-if="currentTaskNotePath"
+                      class="task-label note-chip path-chip"
+                      :title="currentTaskNotePath"
+                    >
+                      <span class="path-label">路径：</span>
+                      <span class="path-text">{{ currentTaskNotePath }}</span>
+                      <button
+                        class="chip-action"
+                        type="button"
+                        @click="copyNotePath(currentTaskNotePath)"
+                      >
+                        复制
+                      </button>
+                    </span>
+                  </div>
+                </header>
+
+                <section v-if="currentTask && currentTask.notices.length" class="task-notices">
+                  <h4>系统提示</h4>
+                  <ul>
+                    <li v-for="(notice, idx) in currentTask.notices" :key="`${notice}-${idx}`">
+                      {{ notice }}
+                    </li>
+                  </ul>
+                </section>
+
+                <section
+                  class="summary-block"
+                  :class="{ 'block-highlight': summaryHighlight }"
+                >
+                  <h3>任务总结</h3>
+                  <pre class="block-pre">{{ currentTaskSummary || "暂无可用信息" }}</pre>
+                </section>
+              </article>
+
+              <article class="task-detail" v-else>
+                <p class="muted">等待任务规划或执行结果。</p>
+              </article>
+            </div>
+
+            <section
+              v-if="reportMarkdown"
+              class="report-block report-block-main"
+              :class="{ 'block-highlight': reportHighlight }"
+            >
+              <h3>最终报告</h3>
+              <pre class="block-pre">{{ reportMarkdown }}</pre>
+            </section>
+          </div>
+
+          <aside class="evidence-column">
+            <section class="node-detail-block" v-if="selectedWorkflowNode">
+              <h3>节点详情</h3>
+              <p class="node-detail-title">{{ selectedWorkflowNode.label }}</p>
+              <p class="muted">
+                {{ selectedWorkflowNode.detail || formatWorkflowStatus(selectedWorkflowNode.status) }}
+              </p>
+              <p v-if="selectedWorkflowNode.taskId" class="muted">
+                关联任务：{{ selectedWorkflowNode.taskId }} · {{ workflowTaskTitle(selectedWorkflowNode.taskId) }}
+              </p>
             </section>
 
             <section
               class="sources-block"
               :class="{ 'block-highlight': sourcesHighlight }"
             >
-              <h3>最新来源</h3>
+              <h3>引用来源</h3>
               <template v-if="currentTaskSources.length">
                 <ul class="sources-list">
                   <li
@@ -294,14 +376,6 @@
                 </ul>
               </template>
               <p v-else class="muted">暂无可用来源</p>
-            </section>
-
-            <section
-              class="summary-block"
-              :class="{ 'block-highlight': summaryHighlight }"
-            >
-              <h3>任务总结</h3>
-              <pre class="block-pre">{{ currentTaskSummary || "暂无可用信息" }}</pre>
             </section>
 
             <section
@@ -347,22 +421,7 @@
                 </li>
               </ul>
             </section>
-          </article>
-
-          <article class="task-detail" v-else>
-            <p class="muted">等待任务规划或执行结果。</p>
-          </article>
-        </div>
-
-        <div
-          v-if="reportMarkdown"
-          class="report-block"
-          :class="{ 'block-highlight': reportHighlight }"
-        >
-          <h3>最终报告</h3>
-          <pre class="block-pre">{{ reportMarkdown }}</pre>
-        </div>
-          </div>
+          </aside>
         </div>
       </section>
 
@@ -412,11 +471,21 @@ interface TodoTaskView {
 }
 
 interface WorkflowNodeView {
+  key: string;
+  id: string;
   node: string;
   label: string;
   status: string;
   detail: string;
+  scope: string;
   taskId: number | null;
+  taskTitle: string;
+  dependsOn: string[];
+}
+
+interface WorkflowEdgeView {
+  from: string;
+  to: string;
 }
 
 const form = reactive({
@@ -434,6 +503,8 @@ const todoTasks = ref<TodoTaskView[]>([]);
 const activeTaskId = ref<number | null>(null);
 const reportMarkdown = ref("");
 const workflowNodes = ref<WorkflowNodeView[]>([]);
+const workflowEdges = ref<WorkflowEdgeView[]>([]);
+const selectedWorkflowNodeId = ref<string | null>(null);
 
 const summaryHighlight = ref(false);
 const sourcesHighlight = ref(false);
@@ -466,11 +537,11 @@ const WORKFLOW_STATUS_LABEL: Record<string, string> = {
 };
 
 const defaultWorkflowNodes: WorkflowNodeView[] = [
-  { node: "plan_tasks", label: "规划研究任务", status: "pending", detail: "", taskId: null },
-  { node: "retrieve_documents", label: "检索文档库", status: "pending", detail: "", taskId: null },
-  { node: "search_web", label: "搜索网页资料", status: "pending", detail: "", taskId: null },
-  { node: "summarize_task", label: "总结任务发现", status: "pending", detail: "", taskId: null },
-  { node: "write_report", label: "撰写最终报告", status: "pending", detail: "", taskId: null }
+  { key: "global:plan_tasks", id: "global:plan_tasks", node: "plan_tasks", label: "规划研究任务", status: "pending", detail: "", scope: "global", taskId: null, taskTitle: "", dependsOn: [] },
+  { key: "global:dispatch_tasks", id: "global:dispatch_tasks", node: "dispatch_tasks", label: "分发并行任务", status: "pending", detail: "", scope: "global", taskId: null, taskTitle: "", dependsOn: ["global:plan_tasks"] },
+  { key: "global:join_tasks", id: "global:join_tasks", node: "join_tasks", label: "汇总任务结果", status: "pending", detail: "", scope: "global", taskId: null, taskTitle: "", dependsOn: [] },
+  { key: "global:write_report", id: "global:write_report", node: "write_report", label: "撰写最终报告", status: "pending", detail: "", scope: "global", taskId: null, taskTitle: "", dependsOn: ["global:join_tasks"] },
+  { key: "global:persist_report", id: "global:persist_report", node: "persist_report", label: "保存最终报告", status: "pending", detail: "", scope: "global", taskId: null, taskTitle: "", dependsOn: ["global:write_report"] }
 ];
 
 function formatTaskStatus(status: string): string {
@@ -479,6 +550,13 @@ function formatTaskStatus(status: string): string {
 
 function formatWorkflowStatus(status: string): string {
   return WORKFLOW_STATUS_LABEL[status] ?? status;
+}
+
+function workflowTaskTitle(taskId: number | null): string {
+  if (!taskId) {
+    return "全局流程";
+  }
+  return todoTasks.value.find((task) => task.id === taskId)?.title ?? "任务";
 }
 
 const totalTasks = computed(() => todoTasks.value.length);
@@ -494,6 +572,32 @@ const completedWorkflowNodes = computed(
       ["completed", "skipped"].includes(node.status)
     ).length
 );
+
+const globalWorkflowNodes = computed(() =>
+  visibleWorkflowNodes.value.filter((node) =>
+    node.scope === "global" && ["plan_tasks", "dispatch_tasks"].includes(node.node)
+  )
+);
+
+const reportWorkflowNodes = computed(() =>
+  visibleWorkflowNodes.value.filter((node) =>
+    node.scope === "global" && ["join_tasks", "write_report", "persist_report"].includes(node.node)
+  )
+);
+
+const taskWorkflowRows = computed(() =>
+  todoTasks.value.map((task) => ({
+    task,
+    nodes: visibleWorkflowNodes.value.filter((node) => node.taskId === task.id)
+  }))
+);
+
+const selectedWorkflowNode = computed(() => {
+  if (!selectedWorkflowNodeId.value) {
+    return null;
+  }
+  return visibleWorkflowNodes.value.find((node) => node.id === selectedWorkflowNodeId.value) ?? null;
+});
 
 const currentTask = computed(() => {
   if (activeTaskId.value !== null) {
@@ -709,6 +813,8 @@ function resetWorkflowState() {
   activeTaskId.value = null;
   reportMarkdown.value = "";
   workflowNodes.value = [];
+  workflowEdges.value = [];
+  selectedWorkflowNodeId.value = null;
   progressLogs.value = [];
   summaryHighlight.value = false;
   sourcesHighlight.value = false;
@@ -747,9 +853,14 @@ function upsertWorkflowNode(payload: Record<string, unknown>) {
   if (!node) {
     return;
   }
+  const nodeId = extractOptionalString(payload.node_id) ?? "";
   const label = extractOptionalString(payload.label) ?? node;
   const status = extractOptionalString(payload.status) ?? "pending";
   const detail = extractOptionalString(payload.detail) ?? "";
+  const scope = extractOptionalString(payload.scope) ?? "global";
+  const dependsOn = Array.isArray(payload.depends_on)
+    ? payload.depends_on.filter((item): item is string => typeof item === "string")
+    : [];
   const rawTaskId = payload.task_id;
   const taskId =
     typeof rawTaskId === "number"
@@ -759,21 +870,77 @@ function upsertWorkflowNode(payload: Record<string, unknown>) {
       : null;
   const normalizedTaskId =
     typeof taskId === "number" && Number.isFinite(taskId) ? taskId : null;
-  const existing = workflowNodes.value.find((item) => item.node === node);
+  const taskTitle = normalizedTaskId ? workflowTaskTitle(normalizedTaskId) : "";
+  const key = nodeId || `${scope}:${normalizedTaskId ?? "global"}:${node}`;
+  const existing = workflowNodes.value.find((item) => item.key === key);
   if (existing) {
+    existing.id = key;
     existing.label = label;
     existing.status = status;
     existing.detail = detail;
+    existing.scope = scope;
     existing.taskId = normalizedTaskId;
+    existing.taskTitle = taskTitle;
+    existing.dependsOn = dependsOn;
   } else {
     workflowNodes.value.push({
+      key,
+      id: key,
       node,
       label,
       status,
       detail,
-      taskId: normalizedTaskId
+      scope,
+      taskId: normalizedTaskId,
+      taskTitle,
+      dependsOn
     });
   }
+}
+
+function applyWorkflowGraph(payload: Record<string, unknown>) {
+  const nodes = Array.isArray(payload.nodes)
+    ? (payload.nodes as Record<string, unknown>[])
+    : [];
+  const edges = Array.isArray(payload.edges)
+    ? (payload.edges as Record<string, unknown>[])
+    : [];
+
+  workflowNodes.value = nodes.map((item) => {
+    const id =
+      extractOptionalString(item.id) ??
+      extractOptionalString(item.node) ??
+      `node-${workflowNodes.value.length}-${Date.now()}`;
+    const rawTaskId = item.task_id;
+    const taskId =
+      typeof rawTaskId === "number"
+        ? rawTaskId
+        : typeof rawTaskId === "string"
+        ? Number(rawTaskId)
+        : null;
+    const normalizedTaskId =
+      typeof taskId === "number" && Number.isFinite(taskId) ? taskId : null;
+
+    return {
+      key: id,
+      id,
+      node: extractOptionalString(item.node) ?? id,
+      label: extractOptionalString(item.label) ?? id,
+      status: extractOptionalString(item.status) ?? "pending",
+      detail: "",
+      scope: extractOptionalString(item.scope) ?? "global",
+      taskId: normalizedTaskId,
+      taskTitle: extractOptionalString(item.task_title) ?? workflowTaskTitle(normalizedTaskId),
+      dependsOn: []
+    };
+  });
+
+  workflowEdges.value = edges
+    .map((item) => ({
+      from: extractOptionalString(item.from) ?? "",
+      to: extractOptionalString(item.to) ?? ""
+    }))
+    .filter((edge) => edge.from && edge.to);
 }
 
 const handleSubmit = async () => {
@@ -823,6 +990,10 @@ const handleSubmit = async () => {
         if (event.type === "workflow_node") {
           const payload = event as Record<string, unknown>;
           upsertWorkflowNode(payload);
+          const nodeId = extractOptionalString(payload.node_id);
+          if (nodeId) {
+            selectedWorkflowNodeId.value = nodeId;
+          }
           const label = extractOptionalString(payload.label) ?? "工作流节点";
           const status = extractOptionalString(payload.status) ?? "";
           const detail = extractOptionalString(payload.detail);
@@ -831,6 +1002,12 @@ const handleSubmit = async () => {
           } else if (detail) {
             progressLogs.value.push(`${label}：${detail}`);
           }
+          return;
+        }
+
+        if (event.type === "workflow_graph") {
+          applyWorkflowGraph(event as Record<string, unknown>);
+          progressLogs.value.push("已加载 LangGraph 工作流拓扑");
           return;
         }
 
@@ -1557,24 +1734,35 @@ select:focus {
 
 .result-workbench {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
   gap: 20px;
   align-items: start;
 }
 
 .workflow-panel,
-.content-column {
+.content-column,
+.evidence-column {
   min-width: 0;
 }
 
+.content-column,
+.evidence-column {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
 .workflow-panel {
-  position: sticky;
-  top: 0;
   background: rgba(255, 255, 255, 0.94);
   border: 1px solid rgba(148, 163, 184, 0.26);
-  border-radius: 18px;
+  border-radius: 12px;
   padding: 18px;
   box-shadow: inset 0 0 0 1px rgba(226, 232, 240, 0.4);
+}
+
+.evidence-column {
+  position: sticky;
+  top: 0;
 }
 
 .workflow-panel-header h3 {
@@ -1589,73 +1777,165 @@ select:focus {
   font-size: 13px;
 }
 
-.workflow-list {
-  list-style: none;
-  margin: 16px 0 0;
-  padding: 0;
+.workflow-map {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.workflow-global-row,
+.workflow-lane-nodes {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(150px, 1fr);
+  gap: 12px;
+  align-items: stretch;
+  min-width: 560px;
+}
+
+.workflow-global-row {
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(239, 246, 255, 0.72);
+  border: 1px solid rgba(147, 197, 253, 0.32);
+}
+
+.report-row {
+  background: rgba(240, 253, 244, 0.72);
+  border-color: rgba(134, 239, 172, 0.34);
+}
+
+.workflow-lanes {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 760px;
 }
 
-.workflow-node-item {
+.workflow-lane {
   display: grid;
-  grid-template-columns: 12px 1fr;
-  gap: 10px;
-  align-items: start;
-  padding: 12px;
-  border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(248, 250, 252, 0.78);
+  grid-template-columns: 170px 1fr;
+  gap: 12px;
+  align-items: stretch;
 }
 
-.workflow-node-dot {
+.workflow-lane-label,
+.graph-node {
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(255, 255, 255, 0.88);
+  color: #1f2937;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workflow-lane-label {
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  justify-content: center;
+  min-height: 82px;
+}
+
+.workflow-lane-label span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.workflow-lane-label strong {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.graph-node {
+  position: relative;
+  min-height: 82px;
+  border-radius: 10px;
+  padding: 12px 12px 12px 34px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.graph-node::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -12px;
+  width: 12px;
+  height: 1px;
+  background: rgba(100, 116, 139, 0.28);
+}
+
+.graph-node:last-child::after {
+  display: none;
+}
+
+.graph-node-dot {
+  position: absolute;
+  top: 15px;
+  left: 13px;
   width: 10px;
   height: 10px;
-  margin-top: 4px;
   border-radius: 999px;
   background: #94a3b8;
 }
 
-.workflow-node-item strong {
-  display: block;
-  color: #1f2937;
+.graph-node strong {
   font-size: 13px;
+  line-height: 1.35;
 }
 
-.workflow-node-item p {
-  margin: 4px 0 0;
+.graph-node small {
   color: #64748b;
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
-.workflow-node-item.in_progress {
-  border-color: rgba(99, 102, 241, 0.4);
-  background: rgba(224, 231, 255, 0.55);
+.graph-node.in_progress {
+  background: rgba(224, 231, 255, 0.62);
+  border-color: rgba(99, 102, 241, 0.36);
 }
 
-.workflow-node-item.in_progress .workflow-node-dot {
+.graph-node.in_progress .graph-node-dot {
   background: #6366f1;
-  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.18);
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.16);
 }
 
-.workflow-node-item.completed {
-  border-color: rgba(34, 197, 94, 0.34);
-  background: rgba(220, 252, 231, 0.48);
+.graph-node.completed {
+  background: rgba(220, 252, 231, 0.62);
+  border-color: rgba(34, 197, 94, 0.28);
 }
 
-.workflow-node-item.completed .workflow-node-dot {
+.graph-node.completed .graph-node-dot {
   background: #22c55e;
 }
 
-.workflow-node-item.skipped {
-  border-color: rgba(148, 163, 184, 0.28);
+.graph-node.skipped {
   background: rgba(241, 245, 249, 0.72);
 }
 
-.workflow-node-item.skipped .workflow-node-dot {
+.graph-node.skipped .graph-node-dot {
   background: #64748b;
+}
+
+.graph-node.failed {
+  background: rgba(254, 226, 226, 0.72);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.graph-node.failed .graph-node-dot {
+  background: #ef4444;
+}
+
+.graph-node.selected {
+  border-color: rgba(59, 130, 246, 0.72);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.14);
 }
 
 .tasks-section {
@@ -1670,7 +1950,7 @@ select:focus {
     grid-template-columns: 1fr;
   }
 
-  .workflow-panel {
+  .evidence-column {
     position: relative;
   }
 
@@ -1915,6 +2195,10 @@ select:focus {
   font-size: 18px;
   font-weight: 600;
   color: #1f2937;
+}
+
+.report-block-main .block-pre {
+  max-height: 560px;
 }
 
 .block-pre {
@@ -2465,6 +2749,26 @@ select:focus {
   font-size: 13px !important;
   color: #64748b !important;
   font-weight: 500;
+}
+
+.node-detail-block {
+  padding: 18px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(226, 232, 240, 0.4);
+}
+
+.node-detail-block h3 {
+  margin: 0 0 10px;
+  font-size: 16px;
+  color: #1f2937;
+}
+
+.node-detail-title {
+  margin: 0 0 8px;
+  color: #0f172a;
+  font-weight: 600;
 }
 
 .document-library {

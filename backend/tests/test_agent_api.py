@@ -1,4 +1,5 @@
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -135,6 +136,62 @@ def test_agent_stream_emits_langgraph_workflow_nodes(monkeypatch):
         event["node"] == "retrieve_documents" and event["status"] == "skipped"
         for event in workflow_nodes
     )
+
+
+def test_agent_stream_emits_workflow_graph_topology(monkeypatch):
+    monkeypatch.setattr(agent_module, "dispatch_search", fake_search)
+    config = Configuration(enable_notes=True, notes_workspace=str(make_notes_dir()), rag_enabled=False)
+    deep_agent = agent_module.DeepResearchAgent(config=config, chat_model=FakeChatModel())
+
+    events = list(deep_agent.run_stream("topic"))
+    graph_event = next(event for event in events if event["type"] == "workflow_graph")
+    node_ids = {node["id"] for node in graph_event["nodes"]}
+    edges = {(edge["from"], edge["to"]) for edge in graph_event["edges"]}
+
+    assert "global:plan_tasks" in node_ids
+    assert "global:dispatch_tasks" in node_ids
+    assert "global:write_report" in node_ids
+    assert "task:1:search_web" in node_ids
+    assert ("global:dispatch_tasks", "task:1:prepare_task") in edges
+    assert ("task:1:persist_task", "global:join_tasks") in edges
+
+
+def test_agent_stream_starts_multiple_tasks_before_first_completion(monkeypatch):
+    def slow_search(query, config, loop_count):
+        time.sleep(0.05)
+        return fake_search(query, config, loop_count)
+
+    monkeypatch.setattr(agent_module, "dispatch_search", slow_search)
+    config = Configuration(enable_notes=True, notes_workspace=str(make_notes_dir()), rag_enabled=False)
+    deep_agent = agent_module.DeepResearchAgent(config=config, chat_model=FakeChatModel())
+
+    events = list(deep_agent.run_stream("topic"))
+    started_before_completion = set()
+    for event in events:
+        if event["type"] == "task_status" and event.get("status") == "completed":
+            break
+        if event["type"] == "task_status" and event.get("status") == "in_progress":
+            started_before_completion.add(event["task_id"])
+
+    assert len(started_before_completion) > 1
+
+
+def test_rag_disabled_marks_each_task_retrieval_skipped(monkeypatch):
+    monkeypatch.setattr(agent_module, "dispatch_search", fake_search)
+    config = Configuration(enable_notes=True, notes_workspace=str(make_notes_dir()), rag_enabled=False)
+    deep_agent = agent_module.DeepResearchAgent(config=config, chat_model=FakeChatModel())
+
+    events = list(deep_agent.run_stream("topic"))
+    todo_event = next(event for event in events if event["type"] == "todo_list")
+    skipped_retrievals = {
+        event["task_id"]
+        for event in events
+        if event["type"] == "workflow_node"
+        and event["node"] == "retrieve_documents"
+        and event["status"] == "skipped"
+    }
+
+    assert skipped_retrievals == {task["id"] for task in todo_event["tasks"]}
 
 
 def test_agent_stream_continues_when_search_has_no_results(monkeypatch):
