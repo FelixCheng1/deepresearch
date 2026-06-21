@@ -102,6 +102,9 @@ export interface DocumentSummary {
   content_type: string;
   size_bytes: number;
   summary: string | null;
+  status: "processing" | "ready" | "failed";
+  error_message: string | null;
+  processed_at: string | null;
   created_at: string;
   chunk_count: number;
 }
@@ -158,6 +161,20 @@ export async function getDocument(documentId: string): Promise<DocumentDetail> {
 
   return await response.json() as DocumentDetail;
 }
+export async function retryDocument(documentId: string): Promise<DocumentSummary> {
+  const response = await fetch(`${baseURL}/documents/${documentId}/retry`, {
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(errorText || `retry document failed: ${response.status}`);
+  }
+
+  const payload = await response.json() as { document: DocumentSummary };
+  return payload.document;
+}
+
 export async function deleteDocument(documentId: string): Promise<void> {
   const response = await fetch(`${baseURL}/documents/${documentId}`, {
     method: "DELETE"

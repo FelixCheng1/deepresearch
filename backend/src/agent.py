@@ -9,6 +9,8 @@ import threading
 from typing import Any, Iterator
 from uuid import uuid4
 
+from langchain_core.messages import HumanMessage, SystemMessage
+
 from config import Configuration
 from models import (
     ResearchDocumentChunk,
@@ -21,7 +23,7 @@ from models import (
     TodoItem,
 )
 from services.graph import build_research_graph, build_task_graph, send_task
-from services.llm import create_chat_model
+from services.llm import create_chat_model, message_content
 from services.note_store import NoteStore
 from services.planner import PlanningService
 from services.repository import ResearchRepository, create_research_repository
@@ -29,7 +31,9 @@ from services.reporter import ReportingService
 from services.retriever import Retriever, create_retriever
 from services.search import dispatch_search, prepare_research_context
 from services.summarizer import SummarizationService
+from services.text_processing import strip_tool_calls
 from services.tool_events import ToolCallTracker
+from utils import strip_thinking_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -287,18 +291,21 @@ class DeepResearchAgent:
         task = payload["task"]
 
         self._workflow(state, "retrieve_documents", "in_progress", task=task)
-        retrieval_query = self._retrieval_query(state, task)
+        base_query = self._retrieval_query(state, task)
+        retrieval_query, rewritten = self._rewrite_retrieval_query(state, task, base_query)
         chunks = self.retriever.retrieve(retrieval_query)
         if chunks:
-            context_chunks = self._limit_retrieval_chunks(chunks)
+            context_chunks = self._prepare_retrieval_chunks(chunks)
             retrieval_context = self._format_retrieval_context(context_chunks)
             sources_summary = self._format_document_sources(context_chunks)
-            detail = f"找到 {len(context_chunks)} / {len(chunks)} 个文档片段"
+            rewrite_detail = "已改写检索查询" if rewritten else "使用原始检索查询"
+            detail = f"{rewrite_detail}，找到 {len(context_chunks)} / {len(chunks)} 个文档片段"
             status = "completed"
         else:
             retrieval_context = ""
             sources_summary = ""
-            detail = "未找到可用文档片段"
+            rewrite_detail = "已改写检索查询" if rewritten else "使用原始检索查询"
+            detail = f"{rewrite_detail}，未找到可用文档片段"
             status = "skipped"
         self._workflow(state, "retrieve_documents", status, task=task, detail=detail)
         return {
@@ -749,6 +756,117 @@ class DeepResearchAgent:
         ]
         return "\n".join(part.strip() for part in parts if part and part.strip())
 
+    def _rewrite_retrieval_query(
+        self,
+        state: SummaryState,
+        task: TodoItem,
+        base_query: str,
+    ) -> tuple[str, bool]:
+        if not self.config.rag_query_rewrite_enabled:
+            return base_query, False
+        prompt = (
+            f"研究主题：{state.research_topic or ''}\n"
+            f"任务名称：{task.title}\n"
+            f"任务目标：{task.intent}\n"
+            f"原始查询：{task.query}\n\n"
+            "请将以上信息改写成一条适合检索本地文档库的中文查询。"
+            "只输出查询文本，不要解释，不要 Markdown，不要工具调用。"
+        )
+        try:
+            response = message_content(
+                self.llm.invoke(
+                    [
+                        SystemMessage(content="你是文档检索查询改写器，只输出一条检索查询。"),
+                        HumanMessage(content=prompt),
+                    ]
+                )
+            )
+            rewritten = self._clean_rewritten_query(response)
+        except Exception as exc:
+            logger.info("RAG query rewrite failed: %s", exc)
+            return base_query, False
+        if not rewritten or rewritten == base_query:
+            return base_query, False
+        return rewritten, True
+
+    def _clean_rewritten_query(self, value: str) -> str:
+        text = strip_tool_calls(value or "").strip()
+        if self.config.strip_thinking_tokens:
+            text = strip_thinking_tokens(text).strip()
+        text = re.sub(r"```(?:\w+)?", "", text).replace("```", "")
+        lines: list[str] = []
+        for line in text.splitlines():
+            cleaned = re.sub(r"^[\s>*#\-:：]+", "", line).strip().strip("\"'")
+            cleaned = re.sub(r"^(检索查询|查询|改写后查询)[:：]", "", cleaned).strip()
+            if cleaned:
+                lines.append(cleaned)
+        rewritten = re.sub(r"\s+", " ", " ".join(lines)).strip()
+        if not rewritten or any(marker in rewritten for marker in ["tool_call", "function", "arguments"]):
+            return ""
+        return rewritten[:500]
+
+    def _prepare_retrieval_chunks(self, chunks: list[ResearchDocumentChunk]) -> list[ResearchDocumentChunk]:
+        deduped = self._dedupe_retrieval_chunks(chunks)
+        if self.config.rag_merge_adjacent_chunks:
+            deduped = self._merge_adjacent_retrieval_chunks(deduped)
+        return self._limit_retrieval_chunks(deduped)
+
+    def _dedupe_retrieval_chunks(self, chunks: list[ResearchDocumentChunk]) -> list[ResearchDocumentChunk]:
+        selected: list[ResearchDocumentChunk] = []
+        seen: set[str] = set()
+        for chunk in chunks:
+            key = f"{chunk.document_id}:{chunk.chunk_index}"
+            if key in seen:
+                continue
+            seen.add(key)
+            selected.append(chunk)
+        return selected
+
+    def _merge_adjacent_retrieval_chunks(self, chunks: list[ResearchDocumentChunk]) -> list[ResearchDocumentChunk]:
+        window = max(0, min(self.config.rag_adjacent_chunk_window, 3))
+        if window <= 0:
+            return chunks
+        documents: dict[str, dict[str, Any] | None] = {}
+        merged: list[ResearchDocumentChunk] = []
+        for chunk in chunks:
+            if chunk.document_id not in documents:
+                documents[chunk.document_id] = self.repository.get_document(chunk.document_id)
+            detail = documents[chunk.document_id]
+            if not detail:
+                merged.append(chunk)
+                continue
+            by_index = {item["chunk_index"]: item for item in detail.get("chunks", [])}
+            indexes = [
+                index
+                for index in range(chunk.chunk_index - window, chunk.chunk_index + window + 1)
+                if index in by_index
+            ]
+            if len(indexes) <= 1:
+                merged.append(chunk)
+                continue
+            text_parts = []
+            for index in indexes:
+                prefix = "命中片段" if index == chunk.chunk_index else "相邻片段"
+                text_parts.append(f"[{prefix} {index}]\n{by_index[index].get('text', '').strip()}")
+            metadata = dict(chunk.metadata)
+            metadata["merged_chunk_indexes"] = indexes
+            metadata["primary_chunk_index"] = chunk.chunk_index
+            metadata["primary_text"] = chunk.text
+            merged.append(
+                ResearchDocumentChunk(
+                    id=chunk.id,
+                    document_id=chunk.document_id,
+                    document_title=chunk.document_title,
+                    chunk_index=chunk.chunk_index,
+                    text="\n\n".join(text_parts),
+                    metadata=metadata,
+                    embedding=chunk.embedding,
+                    embedding_model=chunk.embedding_model,
+                    embedded_at=chunk.embedded_at,
+                )
+            )
+        return merged
+
     def _limit_retrieval_chunks(self, chunks: list[ResearchDocumentChunk]) -> list[ResearchDocumentChunk]:
         max_chars = max(500, self.config.rag_context_max_chars)
         selected: list[ResearchDocumentChunk] = []
@@ -768,10 +886,19 @@ class DeepResearchAgent:
         remaining = max(500, self.config.rag_context_max_chars)
         for chunk in chunks:
             score = chunk.metadata.get("score")
+            bm25_score = chunk.metadata.get("bm25_score")
+            vector_score = chunk.metadata.get("vector_score")
             matched_terms = chunk.metadata.get("matched_terms") or []
+            merged_indexes = chunk.metadata.get("merged_chunk_indexes") or []
             header_parts = [f"[文档库] {chunk.document_title} · 片段 {chunk.chunk_index}"]
             if isinstance(score, (int, float)):
-                header_parts.append(f"相关度 {score:.2f}")
+                header_parts.append(f"混合分 {score:.2f}")
+            if isinstance(bm25_score, (int, float)):
+                header_parts.append(f"BM25 {bm25_score:.2f}")
+            if isinstance(vector_score, (int, float)):
+                header_parts.append(f"向量 {vector_score:.2f}")
+            if merged_indexes:
+                header_parts.append(f"上下文片段 {', '.join(str(index) for index in merged_indexes)}")
             if matched_terms:
                 header_parts.append(f"命中 {', '.join(str(term) for term in matched_terms[:6])}")
             header = " · ".join(header_parts)
@@ -797,17 +924,29 @@ class DeepResearchAgent:
                 continue
             seen.add(key)
             score = chunk.metadata.get("score")
-            score_text = f" · 相关度 {score:.2f}" if isinstance(score, (int, float)) else ""
+            bm25_score = chunk.metadata.get("bm25_score")
+            vector_score = chunk.metadata.get("vector_score")
+            score_parts = []
+            if isinstance(score, (int, float)):
+                score_parts.append(f"混合分 {score:.2f}")
+            if isinstance(bm25_score, (int, float)):
+                score_parts.append(f"BM25 {bm25_score:.2f}")
+            if isinstance(vector_score, (int, float)):
+                score_parts.append(f"向量 {vector_score:.2f}")
+            score_text = f" · {' · '.join(score_parts)}" if score_parts else ""
             matched_terms = chunk.metadata.get("matched_terms") or []
             matched_text = ", ".join(str(term) for term in matched_terms[:8]) or "无显式关键词"
-            snippet = str(chunk.metadata.get("snippet") or chunk.text.replace("\n", " ").strip()[:220])
+            snippet = str(chunk.metadata.get("snippet") or chunk.metadata.get("primary_text") or chunk.text.replace("\n", " ").strip()[:220])
+            merged_indexes = chunk.metadata.get("merged_chunk_indexes") or []
             lines.extend(
                 [
                     f"* {chunk.document_title} · 片段 {chunk.chunk_index}{score_text} : document://{chunk.document_id}#chunk-{chunk.chunk_index}",
                     f"  - 命中: {matched_text}",
-                    f"  - 摘要: {snippet}",
+                    f"  - 信息内容: {snippet}",
                 ]
             )
+            if merged_indexes:
+                lines.append(f"  - 上下文包含相邻片段: {', '.join(str(index) for index in merged_indexes)}")
         return "\n".join(lines)
 
     def _save_document_sources(self, task: TodoItem, chunks: list[ResearchDocumentChunk]) -> None:

@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from config import Configuration, SearchAPI
 from agent import DeepResearchAgent
+from services.document_worker import start_document_worker
 from services.repository import ResearchRepository, create_research_repository
 
 # 添加控制台日志处理程序
@@ -148,6 +149,21 @@ def create_app() -> FastAPI:
             config.strip_thinking_tokens,
             _mask_secret(config.llm_api_key),
         )
+        stop_event, worker = start_document_worker(
+            config=config,
+            repository_factory=get_repository,
+        )
+        app.state.document_worker_stop = stop_event
+        app.state.document_worker = worker
+
+    @app.on_event("shutdown")
+    def stop_document_worker() -> None:
+        stop_event = getattr(app.state, "document_worker_stop", None)
+        worker = getattr(app.state, "document_worker", None)
+        if stop_event is not None:
+            stop_event.set()
+        if worker is not None:
+            worker.join(timeout=2)
 
     @app.get("/healthz")
     def health_check() -> Dict[str, str]:
@@ -174,30 +190,24 @@ def create_app() -> FastAPI:
 
     @app.post("/documents/upload")
     async def upload_document(request: Request) -> Dict[str, Any]:
-        """上传 .txt 或 .md 文档并写入文本切块。"""
+        """上传文档并后台解析、切块入库。"""
 
         filename, content_type, raw_bytes = await _read_uploaded_file(request)
         suffix = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-        if suffix not in {"txt", "md"}:
-            raise HTTPException(status_code=400, detail="仅支持 .txt 和 .md 文档")
+        if suffix not in {"txt", "md", "pdf", "docx"}:
+            raise HTTPException(status_code=400, detail="仅支持 .txt、.md、.pdf 和 .docx 文档")
 
         if not raw_bytes:
             raise HTTPException(status_code=400, detail="上传文件为空")
-        try:
-            raw_text = raw_bytes.decode("utf-8-sig")
-        except UnicodeDecodeError as exc:
-            raise HTTPException(status_code=400, detail="文档必须使用 UTF-8 文本编码") from exc
-        if not raw_text.strip():
-            raise HTTPException(status_code=400, detail="文档没有可检索文本")
 
         config = Configuration.from_env()
         repository = get_repository(config)
-        document = repository.save_document(
+        document = repository.create_pending_document(
             filename=filename,
-            content_type=content_type or ("text/markdown" if suffix == "md" else "text/plain"),
-            raw_text=raw_text,
+            content_type=content_type or "application/octet-stream",
             size_bytes=len(raw_bytes),
         )
+        repository.enqueue_document_job(document.id, raw_bytes)
         return {
             "document": {
                 "id": document.id,
@@ -205,6 +215,9 @@ def create_app() -> FastAPI:
                 "content_type": document.content_type,
                 "size_bytes": document.size_bytes,
                 "summary": document.summary,
+                "status": document.status,
+                "error_message": document.error_message,
+                "processed_at": document.processed_at.isoformat() if document.processed_at else None,
                 "created_at": document.created_at.isoformat(),
                 "chunk_count": len(document.chunks),
             }
@@ -228,6 +241,22 @@ def create_app() -> FastAPI:
         if document is None:
             raise HTTPException(status_code=404, detail="未找到文档")
         return document
+
+
+    @app.post("/documents/{document_id}/retry")
+    def retry_document(document_id: str) -> Dict[str, Any]:
+        config = Configuration.from_env()
+        repository = get_repository(config)
+        document = repository.get_document(document_id)
+        if document is None:
+            raise HTTPException(status_code=404, detail="未找到文档")
+        if document.get("status") != "failed":
+            raise HTTPException(status_code=400, detail="仅失败文档可以重试")
+        job = repository.retry_failed_document(document_id)
+        if job is None:
+            raise HTTPException(status_code=400, detail="文档缺少可重试的上传内容")
+        refreshed = repository.get_document(document_id)
+        return {"document": refreshed, "job": {key: value for key, value in job.items() if key != "payload"}}
 
     @app.delete("/documents/{document_id}")
     def delete_document(document_id: str) -> Dict[str, Any]:
@@ -313,7 +342,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8000,
+        port=int(os.getenv("PORT", "8000")),
         reload=reload_enabled,
         log_level="info"
     )

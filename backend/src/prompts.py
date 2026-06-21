@@ -90,6 +90,7 @@ report_writer_instructions = """
 - 各部分明确分节，禁止添加额外的封面或结语；
 - 若某部分信息缺失，说明"暂无相关信息"；
 - 引用来源时使用任务标题或来源标题，确保可追溯。
+- 如果来源包含 `document://...#chunk-N`，参考来源必须保留具体文档片段链接。
 - 输出给用户的内容中禁止残留 `[TOOL_CALL:...]`、`tool_call`、`function`、`arguments` 等工具调用内容。
 </REQUIREMENTS>
 

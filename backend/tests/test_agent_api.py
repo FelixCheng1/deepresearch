@@ -23,6 +23,8 @@ class FakeChatModel:
             return Response(
                 '{"tasks":[{"title":"背景","intent":"了解背景","query":"topic background"}]}'
             )
+        if "文档检索查询改写器" in system:
+            return Response("topic background LangGraph RAG retrieval quality")
         if "报告撰写" in system:
             return Response("# 最终报告\n\n整合结论。")
         return Response("## 任务总结\n\n- 关键发现")
@@ -39,6 +41,8 @@ class ToolCallOnlySummaryModel(FakeChatModel):
             return Response(
                 '{"tasks":[{"title":"背景","intent":"了解背景","query":"topic background"}]}'
             )
+        if "文档检索查询改写器" in system:
+            return Response("topic background LangGraph RAG retrieval quality")
         if "报告撰写" in system:
             return Response("# 最终报告\n\n整合结论。")
         return Response(

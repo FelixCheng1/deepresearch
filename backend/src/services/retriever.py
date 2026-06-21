@@ -7,6 +7,7 @@ from typing import Protocol
 
 from config import Configuration
 from models import ResearchDocumentChunk
+from services.embeddings import EmbeddingProvider, EmbeddingService
 from services.repository import ResearchRepository
 
 
@@ -36,11 +37,23 @@ class RepositoryRetriever:
     repository: ResearchRepository
     limit: int = 5
     min_score: float = 0.0
+    embedding_service: EmbeddingProvider | None = None
     calls: list[str] = field(default_factory=list)
 
     def retrieve(self, query: str) -> list[ResearchDocumentChunk]:
         self.calls.append(query)
-        return self.repository.search_document_chunks(query, limit=self.limit, min_score=self.min_score)
+        query_embedding = None
+        if self.embedding_service is not None:
+            try:
+                query_embedding = self.embedding_service.embed_query(query)
+            except Exception:
+                query_embedding = None
+        return self.repository.search_document_chunks(
+            query,
+            limit=self.limit,
+            min_score=self.min_score,
+            query_embedding=query_embedding,
+        )
 
 
 def create_retriever(config: Configuration, repository: ResearchRepository) -> Retriever:
@@ -48,8 +61,10 @@ def create_retriever(config: Configuration, repository: ResearchRepository) -> R
 
     if not config.rag_enabled:
         return DisabledRetriever(config)
+    embedding_service = EmbeddingService(config) if config.database_url and config.embedding_model else None
     return RepositoryRetriever(
         repository=repository,
         limit=max(1, min(config.rag_top_k, 20)),
         min_score=max(0.0, config.rag_min_score),
+        embedding_service=embedding_service,
     )

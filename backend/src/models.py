@@ -115,6 +115,9 @@ class ResearchDocumentChunk:
     chunk_index: int
     text: str
     metadata: dict = field(default_factory=dict)
+    embedding: list[float] | None = None
+    embedding_model: Optional[str] = None
+    embedded_at: Optional[datetime] = None
 
 
 @dataclass(kw_only=True)
@@ -125,7 +128,10 @@ class ResearchDocument:
     filename: str
     content_type: str
     size_bytes: int
-    raw_text: str
+    raw_text: str = ""
     summary: Optional[str] = None
+    status: str = "ready"
+    error_message: Optional[str] = None
+    processed_at: Optional[datetime] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     chunks: list[ResearchDocumentChunk] = field(default_factory=list)

@@ -4,14 +4,42 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, create_engine
+from sqlalchemy import LargeBinary, DateTime, ForeignKey, Integer, JSON, String, Text, create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
+from sqlalchemy.types import UserDefinedType
 
 
 class Base(DeclarativeBase):
     """所有数据库表模型的基类。"""
 
+
+class Vector1536(UserDefinedType):
+    cache_ok = True
+
+    def get_col_spec(self, **kw):
+        return "vector(1536)"
+
+    def bind_processor(self, dialect):
+        def process(value):
+            if value is None:
+                return None
+            if isinstance(value, str):
+                return value
+            return "[" + ",".join(str(float(item)) for item in value) + "]"
+
+        return process
+
+    def result_processor(self, dialect, coltype):
+        def process(value):
+            if value is None or isinstance(value, list):
+                return value
+            stripped = str(value).strip().strip("[]")
+            if not stripped:
+                return []
+            return [float(item) for item in stripped.split(",")]
+
+        return process
 
 class ResearchRunRow(Base):
     """一次研究运行。"""
@@ -113,8 +141,11 @@ class DocumentRow(Base):
     filename: Mapped[str] = mapped_column(Text, nullable=False)
     content_type: Mapped[str] = mapped_column(String(128), nullable=False, default="text/plain")
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
-    raw_text: Mapped[str] = mapped_column(Text, nullable=False)
+    raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ready")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -126,6 +157,39 @@ class DocumentRow(Base):
         cascade="all, delete-orphan",
         order_by="DocumentChunkRow.chunk_index",
     )
+    jobs: Mapped[list[DocumentJobRow]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+        order_by="DocumentJobRow.created_at",
+    )
+
+
+class DocumentJobRow(Base):
+    """Background parsing/index jobs for uploaded documents."""
+
+    __tablename__ = "document_jobs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    document_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    job_type: Mapped[str] = mapped_column(String(32), nullable=False, default="parse")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    payload: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    document: Mapped[DocumentRow] = relationship(back_populates="jobs")
 
 
 class DocumentChunkRow(Base):
@@ -143,6 +207,9 @@ class DocumentChunkRow(Base):
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     chunk_metadata: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector1536(), nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    embedded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     document: Mapped[DocumentRow] = relationship(back_populates="chunks")
 

@@ -12,6 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from services.database import Base, DocumentChunkRow
+from services.document_parser import DocumentParseError
+from services.document_worker import process_one_document_job
 from services.repository import InMemoryResearchRepository, PostgresResearchRepository, _tokenize
 from services.retriever import RepositoryRetriever
 from test_agent_api import FakeChatModel, empty_search, fake_search
@@ -179,6 +181,10 @@ def test_fastapi_document_upload_list_and_get(monkeypatch):
     )
     assert upload.status_code == 200
     document_id = upload.json()["document"]["id"]
+    assert upload.json()["document"]["status"] == "processing"
+    assert len(repo.document_jobs) == 1
+    assert next(iter(repo.document_jobs.values()))["status"] == "pending"
+    assert process_one_document_job(repo) is True
 
     listed = client.get("/documents")
     detail = client.get(f"/documents/{document_id}")
@@ -188,19 +194,193 @@ def test_fastapi_document_upload_list_and_get(monkeypatch):
     listed_after_delete = client.get("/documents")
     rejected = client.post(
         "/documents/upload",
-        files={"file": ("paper.pdf", b"%PDF", "application/pdf")},
+        files={"file": ("sheet.csv", b"a,b", "text/csv")},
     )
 
     assert listed.status_code == 200
     assert listed.json()["documents"][0]["filename"] == "memo.md"
     assert detail.status_code == 200
-    assert detail.json()["chunks"]
+    detail_payload = detail.json()
+    assert listed.json()["documents"][0]["status"] == "ready"
+    assert listed.json()["documents"][0]["processed_at"]
+    assert detail_payload["status"] == "ready"
+    assert detail_payload["chunks"]
     assert deleted.status_code == 200
     assert deleted.json() == {"deleted": True, "document_id": document_id}
     assert missing_detail.status_code == 404
     assert missing_delete.status_code == 404
     assert listed_after_delete.json()["documents"] == []
     assert rejected.status_code == 400
+
+
+
+def test_memory_repository_document_processing_status_flow():
+    repo = InMemoryResearchRepository()
+    pending = repo.create_pending_document(
+        filename="async.md",
+        content_type="text/markdown",
+        size_bytes=32,
+    )
+
+    assert repo.get_document(pending.id)["status"] == "processing"
+    assert repo.get_document(pending.id)["chunks"] == []
+    job = repo.enqueue_document_job(pending.id, b"async document text for retrieval")
+    claimed = repo.claim_next_document_job()
+    assert claimed["id"] == job["id"]
+    assert claimed["status"] == "running"
+    assert claimed["attempts"] == 1
+
+    assert repo.complete_document_processing(
+        pending.id,
+        raw_text="async document text for retrieval",
+        content_type="text/markdown",
+    ) is True
+    ready = repo.get_document(pending.id)
+
+    assert ready["status"] == "ready"
+    assert ready["processed_at"]
+    assert ready["chunks"]
+    assert ready["created_at"] == pending.created_at.isoformat()
+    assert repo.succeed_document_job(job["id"]) is True
+    assert repo.document_jobs[job["id"]]["status"] == "succeeded"
+
+    failed = repo.create_pending_document(
+        filename="empty.pdf",
+        content_type="application/pdf",
+        size_bytes=10,
+    )
+    assert repo.fail_document_processing(failed.id, "empty pdf") is True
+    failed_detail = repo.get_document(failed.id)
+
+    assert failed_detail["status"] == "failed"
+    assert failed_detail["error_message"] == "empty pdf"
+    assert failed_detail["chunks"] == []
+
+
+def test_fastapi_pdf_docx_upload_uses_background_parser(monkeypatch):
+    repo = InMemoryResearchRepository()
+    monkeypatch.setattr(main_module, "create_research_repository", lambda config: repo)
+
+    calls = []
+
+    def fake_parse_document(filename, content_type, payload):
+        calls.append((filename, content_type, payload))
+        if filename.endswith(".pdf"):
+            return "pdf extracted local retrieval text", "application/pdf"
+        return "docx paragraph text\n\ntable cell text", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+    monkeypatch.setattr("services.document_worker.parse_document", fake_parse_document)
+    app = main_module.create_app()
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(app)
+    pdf_upload = client.post(
+        "/documents/upload",
+        files={"file": ("paper.pdf", b"%PDF sample", "application/pdf")},
+    )
+    docx_upload = client.post(
+        "/documents/upload",
+        files={
+            "file": (
+                "memo.docx",
+                b"docx sample",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+
+    assert pdf_upload.status_code == 200
+    assert docx_upload.status_code == 200
+    assert pdf_upload.json()["document"]["status"] == "processing"
+    assert docx_upload.json()["document"]["status"] == "processing"
+    assert process_one_document_job(repo) is True
+    assert process_one_document_job(repo) is True
+    assert [call[0] for call in calls] == ["paper.pdf", "memo.docx"]
+
+    documents = client.get("/documents").json()["documents"]
+    assert {document["filename"]: document["status"] for document in documents} == {
+        "memo.docx": "ready",
+        "paper.pdf": "ready",
+    }
+    assert all(document["chunk_count"] >= 1 for document in documents)
+
+
+def test_fastapi_pdf_upload_failure_marks_document_failed(monkeypatch):
+    repo = InMemoryResearchRepository()
+    monkeypatch.setattr(main_module, "create_research_repository", lambda config: repo)
+
+    def fake_parse_document(filename, content_type, payload):
+        raise DocumentParseError("empty pdf")
+
+    monkeypatch.setattr("services.document_worker.parse_document", fake_parse_document)
+    app = main_module.create_app()
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(app)
+    upload = client.post(
+        "/documents/upload",
+        files={"file": ("scan.pdf", b"%PDF empty", "application/pdf")},
+    )
+    document_id = upload.json()["document"]["id"]
+    assert process_one_document_job(repo) is True
+    detail = client.get(f"/documents/{document_id}").json()
+
+    assert upload.status_code == 200
+    assert upload.json()["document"]["status"] == "processing"
+    assert detail["status"] == "failed"
+    assert detail["error_message"] == "empty pdf"
+    assert detail["chunks"] == []
+
+
+def test_fastapi_retry_failed_document_requeues_job(monkeypatch):
+    repo = InMemoryResearchRepository()
+    monkeypatch.setattr(main_module, "create_research_repository", lambda config: repo)
+
+    def fail_parse(filename, content_type, payload):
+        raise DocumentParseError("empty pdf")
+
+    monkeypatch.setattr("services.document_worker.parse_document", fail_parse)
+    app = main_module.create_app()
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(app)
+    upload = client.post(
+        "/documents/upload",
+        files={"file": ("scan.pdf", b"%PDF empty", "application/pdf")},
+    )
+    document_id = upload.json()["document"]["id"]
+    assert process_one_document_job(repo) is True
+
+    ready_retry = client.post(f"/documents/{document_id}/retry")
+    assert ready_retry.status_code == 200
+    assert ready_retry.json()["document"]["status"] == "processing"
+    assert len([job for job in repo.document_jobs.values() if job["status"] == "pending"]) == 1
+
+    processing_retry = client.post(f"/documents/{document_id}/retry")
+    assert processing_retry.status_code == 400
+
+
+def test_retry_ready_document_returns_400(monkeypatch):
+    repo = InMemoryResearchRepository()
+    monkeypatch.setattr(main_module, "create_research_repository", lambda config: repo)
+    app = main_module.create_app()
+
+    from fastapi.testclient import TestClient
+
+    document = repo.save_document(
+        filename="ready.md",
+        content_type="text/markdown",
+        raw_text="ready document",
+        size_bytes=20,
+    )
+    client = TestClient(app)
+
+    response = client.post(f"/documents/{document.id}/retry")
+
+    assert response.status_code == 400
 
 
 def test_rag_enabled_retrieve_documents_returns_uploaded_chunk(monkeypatch):
@@ -233,7 +413,7 @@ def test_rag_enabled_retrieve_documents_returns_uploaded_chunk(monkeypatch):
     assert source_events
     assert "document://" in source_events[0]["latest_sources"]
     assert "本地文档库" in source_events[0]["raw_context"]
-    assert "相关度" in source_events[0]["latest_sources"]
+    assert "BM25" in source_events[0]["latest_sources"]
     assert "命中:" in source_events[0]["latest_sources"]
 
 

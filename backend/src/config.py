@@ -111,10 +111,40 @@ class Configuration(BaseModel):
         title="RAG 最低匹配分",
         description="低于该分数的文档片段不会进入任务上下文",
     )
-    embedding_model: Optional[str] = Field(
+    rag_query_rewrite_enabled: bool = Field(
+        default=True,
+        title="启用 RAG 查询改写",
+        description="是否用现有 LLM 将任务信息改写为更适合文档库的检索查询",
+    )
+    rag_merge_adjacent_chunks: bool = Field(
+        default=True,
+        title="合并相邻文档片段",
+        description="是否在命中文档片段附近合并相邻 chunk 作为上下文",
+    )
+    rag_adjacent_chunk_window: int = Field(
+        default=1,
+        title="相邻片段窗口",
+        description="命中文档片段前后最多合并的 chunk 数量",
+    )
+    embedding_base_url: Optional[str] = Field(
         default=None,
+        title="Embedding 基础 URL",
+        description="可选的 OpenAI-compatible embeddings API 地址；未设置时回退到 LLM_BASE_URL",
+    )
+    embedding_api_key: Optional[str] = Field(
+        default=None,
+        title="Embedding API Key",
+        description="可选的 embeddings API Key；未设置时回退到 LLM_API_KEY",
+    )
+    embedding_model: Optional[str] = Field(
+        default="text-embedding-3-small",
         title="嵌入模型",
         description="为未来向量索引预留的嵌入模型标识",
+    )
+    embedding_dimension: int = Field(
+        default=1536,
+        title="嵌入维度",
+        description="document_chunks.embedding 使用的固定向量维度",
     )
     vector_namespace: str = Field(
         default="deep_research",
@@ -155,7 +185,13 @@ class Configuration(BaseModel):
             "rag_top_k": os.getenv("RAG_TOP_K"),
             "rag_context_max_chars": os.getenv("RAG_CONTEXT_MAX_CHARS"),
             "rag_min_score": os.getenv("RAG_MIN_SCORE"),
+            "rag_query_rewrite_enabled": os.getenv("RAG_QUERY_REWRITE_ENABLED"),
+            "rag_merge_adjacent_chunks": os.getenv("RAG_MERGE_ADJACENT_CHUNKS"),
+            "rag_adjacent_chunk_window": os.getenv("RAG_ADJACENT_CHUNK_WINDOW"),
+            "embedding_base_url": os.getenv("EMBEDDING_BASE_URL"),
+            "embedding_api_key": os.getenv("EMBEDDING_API_KEY"),
             "embedding_model": os.getenv("EMBEDDING_MODEL"),
+            "embedding_dimension": os.getenv("EMBEDDING_DIMENSION"),
             "vector_namespace": os.getenv("VECTOR_NAMESPACE"),
         }
 
@@ -182,4 +218,3 @@ class Configuration(BaseModel):
         """尽力解析当前应使用的模型标识。"""
 
         return self.llm_model_id or self.local_llm
-

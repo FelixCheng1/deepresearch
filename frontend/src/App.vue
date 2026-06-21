@@ -57,11 +57,11 @@
             </div>
             <div class="document-dropzone">
               <strong>{{ documents.length ? "研究将优先检索这些文档" : "先上传研究文档" }}</strong>
-              <p>{{ documentLoading ? "正在切块入库..." : "支持 .txt / .md，上传完成后再开始研究。" }}</p>
+              <p>{{ documentLoading ? "正在上传并解析..." : "支持 .txt / .md / .pdf / .docx，上传后会后台解析并进入 RAG 检索。" }}</p>
               <label class="upload-button" :class="{ disabled: uploadDisabled }">
                 <input
                   type="file"
-                  accept=".txt,.md,text/plain,text/markdown"
+                  accept=".txt,.md,.pdf,.docx,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                   :disabled="uploadDisabled"
                   @change="handleDocumentUpload"
                 />
@@ -95,6 +95,16 @@
                     <strong :title="selectedDocument.filename">{{ selectedDocument.filename }}</strong>
                     <span>{{ selectedDocument.chunk_count }} 片段 · {{ formatFileSize(selectedDocument.size_bytes) }}</span>
                   </div>
+
+                  <button
+                    v-if="selectedDocument.status === 'failed'"
+                    type="button"
+                    class="document-delete-btn"
+                    :disabled="documentRetrying"
+                    @click="handleRetryDocument(selectedDocument.id)"
+                  >
+                    {{ documentRetrying ? "重试中..." : "重试解析" }}
+                  </button>
                   <button
                     type="button"
                     class="document-delete-btn"
@@ -104,7 +114,7 @@
                     {{ documentDeleting ? "删除中..." : "删除" }}
                   </button>
                 </header>
-                <p class="document-preview">{{ selectedDocument.summary || previewText(selectedDocument.raw_text) }}</p>
+                <p class="document-preview">{{ documentPreviewText(selectedDocument) }}</p>
                 <div class="document-chunks">
                   <button
                     v-for="chunk in visibleDocumentChunks"
@@ -203,7 +213,7 @@
               <label class="upload-button" :class="{ disabled: uploadDisabled }">
                 <input
                   type="file"
-                  accept=".txt,.md,text/plain,text/markdown"
+                  accept=".txt,.md,.pdf,.docx,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                   :disabled="uploadDisabled"
                   @change="handleDocumentUpload"
                 />
@@ -237,6 +247,16 @@
                     <strong :title="selectedDocument.filename">{{ selectedDocument.filename }}</strong>
                     <span>{{ selectedDocument.chunk_count }} 片段 · {{ formatFileSize(selectedDocument.size_bytes) }}</span>
                   </div>
+
+                  <button
+                    v-if="selectedDocument.status === 'failed'"
+                    type="button"
+                    class="document-delete-btn"
+                    :disabled="documentRetrying"
+                    @click="handleRetryDocument(selectedDocument.id)"
+                  >
+                    {{ documentRetrying ? "重试中..." : "重试解析" }}
+                  </button>
                   <button
                     type="button"
                     class="document-delete-btn"
@@ -246,7 +266,7 @@
                     {{ documentDeleting ? "删除中..." : "删除" }}
                   </button>
                 </header>
-                <p class="document-preview">{{ selectedDocument.summary || previewText(selectedDocument.raw_text) }}</p>
+                <p class="document-preview">{{ documentPreviewText(selectedDocument) }}</p>
                 <div class="document-chunks">
                   <button
                     v-for="chunk in visibleDocumentChunks"
@@ -568,6 +588,7 @@ import {
   deleteDocument,
   getDocument,
   listDocuments,
+  retryDocument,
   runResearchStream,
   uploadDocument,
   type DocumentDetail,
@@ -653,6 +674,7 @@ const documents = ref<DocumentSummary[]>([]);
 const documentLoading = ref(false);
 const documentDetailLoading = ref(false);
 const documentDeleting = ref(false);
+const documentRetrying = ref(false);
 const documentError = ref("");
 const documentSuccess = ref("");
 const researchDocumentCount = ref(0);
@@ -661,6 +683,7 @@ const selectedDocument = ref<DocumentDetail | null>(null);
 const expandedChunkIds = ref<Set<string>>(new Set());
 
 let currentController: AbortController | null = null;
+let documentPollTimer: number | null = null;
 
 const searchOptions = [
   "advanced",
@@ -1096,6 +1119,13 @@ async function refreshDocuments() {
   documentError.value = "";
   try {
     documents.value = await listDocuments();
+    updateDocumentPolling();
+    if (selectedDocumentId.value && documents.value.some((item) => item.id === selectedDocumentId.value)) {
+      const latest = documents.value.find((item) => item.id === selectedDocumentId.value);
+      if (latest && selectedDocument.value && latest.status !== selectedDocument.value.status) {
+        selectedDocument.value = await getDocument(selectedDocumentId.value);
+      }
+    }
     if (
       selectedDocumentId.value &&
       !documents.value.some((item) => item.id === selectedDocumentId.value)
@@ -1119,6 +1149,23 @@ async function selectDocument(documentId: string) {
     documentError.value = err instanceof Error ? err.message : "读取文档详情失败";
   } finally {
     documentDetailLoading.value = false;
+  }
+}
+
+async function handleRetryDocument(documentId: string) {
+  documentRetrying.value = true;
+  documentError.value = "";
+  documentSuccess.value = "";
+  try {
+    const document = await retryDocument(documentId);
+    documents.value = documents.value.map((item) => item.id === document.id ? document : item);
+    selectedDocument.value = await getDocument(documentId);
+    documentSuccess.value = `已上传 ${document.filename}，正在后台解析`;
+    updateDocumentPolling();
+  } catch (err) {
+    documentError.value = err instanceof Error ? err.message : "重试解析失败";
+  } finally {
+    documentRetrying.value = false;
   }
 }
 
@@ -1169,14 +1216,26 @@ function previewText(value: string | null | undefined, maxLength = 180): string 
   return compact.length > maxLength ? `${compact.slice(0, maxLength).trim()}...` : compact;
 }
 
+function documentPreviewText(document: DocumentSummary | DocumentDetail): string {
+  if (document.status === "processing") {
+    return "文档正在解析，完成后会自动进入 RAG 检索。";
+  }
+  if (document.status === "failed") {
+    return document.error_message || "文档解析失败";
+  }
+  return document.summary || previewText("raw_text" in document ? document.raw_text : "");
+}
+
 const visibleDocumentChunks = computed(() =>
-  selectedDocument.value ? selectedDocument.value.chunks.slice(0, 10) : []
+  selectedDocument.value && selectedDocument.value.status === "ready"
+    ? selectedDocument.value.chunks.slice(0, 10)
+    : []
 );
 
 const uploadDisabled = computed(() => documentLoading.value || (isExpanded.value && loading.value));
 const sidebarDocumentHint = computed(() => {
   if (documentLoading.value) {
-    return "正在切块入库...";
+    return "正在上传并解析...";
   }
   if (loading.value) {
     return "研究进行中暂不上传新文档；新增文档可在下一次研究前加入。";
@@ -1197,8 +1256,8 @@ async function handleDocumentUpload(event: Event) {
   }
 
   const suffix = file.name.split(".").pop()?.toLowerCase();
-  if (!suffix || !["txt", "md"].includes(suffix)) {
-    documentError.value = "仅支持 .txt 和 .md 文档";
+  if (!suffix || !["txt", "md", "pdf", "docx"].includes(suffix)) {
+    documentError.value = "仅支持 .txt、.md、.pdf 和 .docx 文档";
     input.value = "";
     return;
   }
@@ -1212,13 +1271,41 @@ async function handleDocumentUpload(event: Event) {
       document,
       ...documents.value.filter((item) => item.id !== document.id)
     ];
-    documentSuccess.value = `已上传 ${document.filename}，生成 ${document.chunk_count} 个片段`;
+    documentSuccess.value = `已上传 ${document.filename}，正在后台解析`;
+    updateDocumentPolling();
     await selectDocument(document.id);
   } catch (err) {
     documentError.value = err instanceof Error ? err.message : "文档上传失败";
   } finally {
     documentLoading.value = false;
     input.value = "";
+  }
+}
+
+function documentStatusLabel(document: DocumentSummary | DocumentDetail): string {
+  if (document.status === "processing") {
+    return "解析中";
+  }
+  if (document.status === "failed") {
+    return "解析失败";
+  }
+  return "可检索";
+}
+
+function documentStatusText(document: DocumentSummary | DocumentDetail): string {
+  return `${documentStatusLabel(document)} · ${document.chunk_count} 片段 · ${formatFileSize(document.size_bytes)}`;
+}
+
+function updateDocumentPolling() {
+  const shouldPoll = documents.value.some((document) => document.status === "processing");
+  if (shouldPoll && documentPollTimer === null) {
+    documentPollTimer = window.setInterval(() => {
+      void refreshDocuments();
+    }, 2000);
+  }
+  if (!shouldPoll && documentPollTimer !== null) {
+    window.clearInterval(documentPollTimer);
+    documentPollTimer = null;
   }
 }
 
@@ -1577,6 +1664,10 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  if (documentPollTimer !== null) {
+    window.clearInterval(documentPollTimer);
+    documentPollTimer = null;
+  }
   if (currentController) {
     currentController.abort();
     currentController = null;
@@ -1774,6 +1865,7 @@ onBeforeUnmount(() => {
 textarea,
 input,
 select {
+  font-family: inherit;
   padding: 14px 16px;
   border-radius: 16px;
   border: 1px solid rgba(148, 163, 184, 0.35);
