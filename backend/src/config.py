@@ -126,6 +126,51 @@ class Configuration(BaseModel):
         title="相邻片段窗口",
         description="命中文档片段前后最多合并的 chunk 数量",
     )
+    rag_rerank_enabled: bool = Field(
+        default=False,
+        title="启用 Cross-Encoder 重排",
+        description="是否对 RAG 候选片段进行 cross-encoder rerank",
+    )
+    rag_rerank_model: str = Field(
+        default="BAAI/bge-reranker-base",
+        title="RAG 重排模型",
+        description="sentence-transformers CrossEncoder 模型名称",
+    )
+    rag_rerank_top_n: int = Field(
+        default=20,
+        title="RAG 重排候选数",
+        description="进入 rerank 的 hybrid 检索候选片段数量",
+    )
+    pdf_ocr_enabled: bool = Field(
+        default=False,
+        title="启用 PDF OCR",
+        description="PDF 无可提取文本时是否尝试本地 OCR",
+    )
+    pdf_ocr_language: str = Field(
+        default="chi_sim+eng",
+        title="PDF OCR 语言",
+        description="Tesseract OCR 语言配置",
+    )
+    pdf_ocr_dpi: int = Field(
+        default=200,
+        title="PDF OCR DPI",
+        description="扫描 PDF 转图片时使用的 DPI",
+    )
+    pdf_ocr_max_pages: int = Field(
+        default=20,
+        title="PDF OCR 最大页数",
+        description="最多 OCR 的 PDF 页数",
+    )
+    tesseract_cmd: Optional[str] = Field(
+        default=None,
+        title="Tesseract 命令路径",
+        description="Windows 可手动指定 tesseract.exe 路径",
+    )
+    poppler_path: Optional[str] = Field(
+        default=None,
+        title="Poppler 路径",
+        description="Windows 可手动指定 poppler bin 路径",
+    )
     embedding_base_url: Optional[str] = Field(
         default=None,
         title="Embedding 基础 URL",
@@ -188,6 +233,15 @@ class Configuration(BaseModel):
             "rag_query_rewrite_enabled": os.getenv("RAG_QUERY_REWRITE_ENABLED"),
             "rag_merge_adjacent_chunks": os.getenv("RAG_MERGE_ADJACENT_CHUNKS"),
             "rag_adjacent_chunk_window": os.getenv("RAG_ADJACENT_CHUNK_WINDOW"),
+            "rag_rerank_enabled": os.getenv("RAG_RERANK_ENABLED"),
+            "rag_rerank_model": os.getenv("RAG_RERANK_MODEL"),
+            "rag_rerank_top_n": os.getenv("RAG_RERANK_TOP_N"),
+            "pdf_ocr_enabled": os.getenv("PDF_OCR_ENABLED"),
+            "pdf_ocr_language": os.getenv("PDF_OCR_LANGUAGE"),
+            "pdf_ocr_dpi": os.getenv("PDF_OCR_DPI"),
+            "pdf_ocr_max_pages": os.getenv("PDF_OCR_MAX_PAGES"),
+            "tesseract_cmd": os.getenv("TESSERACT_CMD"),
+            "poppler_path": os.getenv("POPPLER_PATH"),
             "embedding_base_url": os.getenv("EMBEDDING_BASE_URL"),
             "embedding_api_key": os.getenv("EMBEDDING_API_KEY"),
             "embedding_model": os.getenv("EMBEDDING_MODEL"),

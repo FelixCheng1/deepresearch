@@ -120,6 +120,20 @@ cd backend
 uv run python src/embedding_cli.py --backfill
 ```
 
+可选增强能力：
+
+```text
+RAG_RERANK_ENABLED=false
+RAG_RERANK_MODEL=BAAI/bge-reranker-base
+RAG_RERANK_TOP_N=20
+PDF_OCR_ENABLED=false
+PDF_OCR_LANGUAGE=chi_sim+eng
+PDF_OCR_DPI=200
+PDF_OCR_MAX_PAGES=20
+```
+
+Cross-Encoder rerank 需要额外安装 `sentence-transformers`，首次启用会下载模型。PDF OCR 需要额外安装 `pdf2image`、`pytesseract`、`pillow`，并在系统中安装 Tesseract 和 Poppler；Windows 可通过 `TESSERACT_CMD`、`POPPLER_PATH` 指定路径。
+
 ## 启动前端
 
 前端默认请求 `http://localhost:8000`。如果你改了后端端口，再创建 `frontend/.env.local`：
@@ -166,12 +180,29 @@ npm run dev
 ```powershell
 cd backend
 uv run pytest
+uv run alembic heads
 ```
 
 ```powershell
 cd frontend
+.\node_modules\.bin\vue-tsc.cmd --noEmit
 npm run build
 ```
+
+如果 `npm run build` 在 Windows 上报 `esbuild spawn EPERM`，先确认 `vue-tsc` 是否通过；该错误通常是本机权限或杀毒软件拦截 esbuild 子进程，不是 TypeScript 类型错误。
+
+## 最终验收清单
+
+- 上传 `.txt` / `.md` / `.pdf` / `.docx` 后，文档状态能从“解析中”变为“可检索”。
+- 上传空 PDF 或无法解析文档时，状态显示“解析失败”，并可点击重试。
+- 开始研究后，LangGraph 工作流一开始就显示，且可以收起/展开。
+- 引用来源中出现本地 `document://...#chunk-...` 时，前端标记为 RAG 命中片段。
+- 最终报告以 Markdown 样式渲染，标题、列表、代码和链接可读。
+- 后端测试、Alembic head、前端类型检查通过。
+
+## 数据库说明
+
+如果你之前主要使用 MySQL，可以先看 [docs/database.md](docs/database.md)。里面按本项目实际表结构解释了 PostgreSQL、SQLAlchemy、Alembic 和 pgvector 的作用。
 
 ## 开发注意事项
 

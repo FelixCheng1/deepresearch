@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from services.database import Base, DocumentChunkRow
-from services.document_parser import DocumentParseError
+from services.document_parser import DocumentParseError, parse_document
 from services.document_worker import process_one_document_job
 from services.repository import InMemoryResearchRepository, PostgresResearchRepository, _tokenize
 from services.retriever import RepositoryRetriever
@@ -105,6 +105,113 @@ def test_repository_retriever_returns_matching_document_chunks():
 
     assert chunks
     assert "chunk" in chunks[0].text
+
+
+
+class FakeReranker:
+    def __init__(self, fail: bool = False):
+        self.fail = fail
+        self.calls = []
+
+    def rerank(self, query, chunks, limit):
+        self.calls.append((query, chunks, limit))
+        if self.fail:
+            raise RuntimeError("rerank failed")
+        ranked = list(reversed(chunks))[:limit]
+        for index, chunk in enumerate(ranked, start=1):
+            chunk.metadata = {**chunk.metadata, "rerank_score": 100 - index}
+        return ranked
+
+
+def test_repository_retriever_reranks_candidates_when_enabled():
+    repo = InMemoryResearchRepository()
+    first = repo.save_document(filename="a.txt", content_type="text/plain", raw_text="alpha beta first", size_bytes=20)
+    second = repo.save_document(filename="b.txt", content_type="text/plain", raw_text="alpha beta second", size_bytes=20)
+    reranker = FakeReranker()
+    retriever = RepositoryRetriever(repo, limit=1, reranker=reranker, rerank_top_n=2)
+
+    chunks = retriever.retrieve("alpha beta")
+
+    assert len(chunks) == 1
+    assert chunks[0].document_id == second.id
+    assert chunks[0].metadata["rerank_score"] == 99
+    assert reranker.calls
+    assert first.id != second.id
+
+
+def test_repository_retriever_falls_back_when_rerank_fails():
+    repo = InMemoryResearchRepository()
+    repo.save_document(filename="a.txt", content_type="text/plain", raw_text="alpha beta first", size_bytes=20)
+    repo.save_document(filename="b.txt", content_type="text/plain", raw_text="alpha beta second", size_bytes=20)
+    retriever = RepositoryRetriever(repo, limit=1, reranker=FakeReranker(fail=True), rerank_top_n=2)
+
+    chunks = retriever.retrieve("alpha beta")
+
+    assert len(chunks) == 1
+    assert "rerank_score" not in chunks[0].metadata
+
+
+def test_repository_retriever_does_not_rerank_when_disabled():
+    repo = InMemoryResearchRepository()
+    repo.save_document(filename="a.txt", content_type="text/plain", raw_text="alpha beta first", size_bytes=20)
+    reranker = FakeReranker()
+    retriever = RepositoryRetriever(repo, limit=1)
+
+    chunks = retriever.retrieve("alpha beta")
+
+    assert chunks
+    assert reranker.calls == []
+
+
+def test_pdf_parse_uses_native_text_before_ocr(monkeypatch):
+    def fail_ocr(payload, config):
+        raise AssertionError("OCR should not run when PDF text exists")
+
+    monkeypatch.setattr("services.document_parser._extract_pdf_text", lambda payload: "native pdf text")
+    monkeypatch.setattr("services.document_parser._ocr_pdf", fail_ocr)
+
+    text, content_type = parse_document("paper.pdf", "application/pdf", b"pdf", Configuration(pdf_ocr_enabled=True))
+
+    assert text == "native pdf text"
+    assert content_type == "application/pdf"
+
+
+def test_pdf_parse_empty_without_ocr_fails(monkeypatch):
+    monkeypatch.setattr("services.document_parser._extract_pdf_text", lambda payload: "")
+
+    try:
+        parse_document("scan.pdf", "application/pdf", b"pdf", Configuration(pdf_ocr_enabled=False))
+    except DocumentParseError as exc:
+        assert "OCR is disabled" in str(exc)
+    else:
+        raise AssertionError("expected DocumentParseError")
+
+
+def test_pdf_parse_empty_with_ocr_uses_ocr(monkeypatch):
+    monkeypatch.setattr("services.document_parser._extract_pdf_text", lambda payload: "")
+    monkeypatch.setattr("services.document_parser._ocr_pdf", lambda payload, config: "ocr extracted text")
+
+    text, content_type = parse_document("scan.pdf", "application/pdf", b"pdf", Configuration(pdf_ocr_enabled=True))
+
+    assert text == "ocr extracted text"
+    assert content_type == "application/pdf"
+
+
+def test_pdf_ocr_failure_is_clear(monkeypatch):
+    monkeypatch.setattr("services.document_parser._extract_pdf_text", lambda payload: "")
+
+    def fail_ocr(payload, config):
+        raise DocumentParseError("PDF OCR failed; check Tesseract and Poppler installation")
+
+    monkeypatch.setattr("services.document_parser._ocr_pdf", fail_ocr)
+
+    try:
+        parse_document("scan.pdf", "application/pdf", b"pdf", Configuration(pdf_ocr_enabled=True))
+    except DocumentParseError as exc:
+        assert "Tesseract and Poppler" in str(exc)
+    else:
+        raise AssertionError("expected DocumentParseError")
+
 
 def test_rag_tokenizer_supports_english_numbers_and_cjk_bigrams():
     tokens = _tokenize("LangGraph 2026 文档检索质量")
@@ -263,7 +370,7 @@ def test_fastapi_pdf_docx_upload_uses_background_parser(monkeypatch):
 
     calls = []
 
-    def fake_parse_document(filename, content_type, payload):
+    def fake_parse_document(filename, content_type, payload, config=None):
         calls.append((filename, content_type, payload))
         if filename.endswith(".pdf"):
             return "pdf extracted local retrieval text", "application/pdf"
@@ -310,7 +417,7 @@ def test_fastapi_pdf_upload_failure_marks_document_failed(monkeypatch):
     repo = InMemoryResearchRepository()
     monkeypatch.setattr(main_module, "create_research_repository", lambda config: repo)
 
-    def fake_parse_document(filename, content_type, payload):
+    def fake_parse_document(filename, content_type, payload, config=None):
         raise DocumentParseError("empty pdf")
 
     monkeypatch.setattr("services.document_worker.parse_document", fake_parse_document)
@@ -338,7 +445,7 @@ def test_fastapi_retry_failed_document_requeues_job(monkeypatch):
     repo = InMemoryResearchRepository()
     monkeypatch.setattr(main_module, "create_research_repository", lambda config: repo)
 
-    def fail_parse(filename, content_type, payload):
+    def fail_parse(filename, content_type, payload, config=None):
         raise DocumentParseError("empty pdf")
 
     monkeypatch.setattr("services.document_worker.parse_document", fail_parse)
@@ -415,6 +522,27 @@ def test_rag_enabled_retrieve_documents_returns_uploaded_chunk(monkeypatch):
     assert "本地文档库" in source_events[0]["raw_context"]
     assert "BM25" in source_events[0]["latest_sources"]
     assert "命中:" in source_events[0]["latest_sources"]
+
+
+def test_document_sources_include_rerank_score():
+    deep_agent = agent_module.DeepResearchAgent(
+        config=Configuration(enable_notes=True, notes_workspace=str(make_notes_dir()), rag_enabled=True),
+        repository=InMemoryResearchRepository(),
+        chat_model=FakeChatModel(),
+    )
+    chunk = ResearchDocumentChunk(
+        id="chunk-1",
+        document_id="doc-1",
+        document_title="local.md",
+        chunk_index=2,
+        text="reranked local evidence",
+        metadata={"score": 12.3, "bm25_score": 1.2, "vector_score": 45.6, "rerank_score": 98.7},
+    )
+
+    summary = deep_agent._format_document_sources([chunk])
+
+    assert "document://doc-1#chunk-2" in summary
+    assert "重排 98.70" in summary
 
 
 def test_rag_disabled_still_skips_without_touching_retriever(monkeypatch):

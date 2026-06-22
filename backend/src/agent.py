@@ -888,6 +888,7 @@ class DeepResearchAgent:
             score = chunk.metadata.get("score")
             bm25_score = chunk.metadata.get("bm25_score")
             vector_score = chunk.metadata.get("vector_score")
+            rerank_score = chunk.metadata.get("rerank_score")
             matched_terms = chunk.metadata.get("matched_terms") or []
             merged_indexes = chunk.metadata.get("merged_chunk_indexes") or []
             header_parts = [f"[文档库] {chunk.document_title} · 片段 {chunk.chunk_index}"]
@@ -897,6 +898,8 @@ class DeepResearchAgent:
                 header_parts.append(f"BM25 {bm25_score:.2f}")
             if isinstance(vector_score, (int, float)):
                 header_parts.append(f"向量 {vector_score:.2f}")
+            if isinstance(rerank_score, (int, float)):
+                header_parts.append(f"重排 {rerank_score:.2f}")
             if merged_indexes:
                 header_parts.append(f"上下文片段 {', '.join(str(index) for index in merged_indexes)}")
             if matched_terms:
@@ -926,6 +929,7 @@ class DeepResearchAgent:
             score = chunk.metadata.get("score")
             bm25_score = chunk.metadata.get("bm25_score")
             vector_score = chunk.metadata.get("vector_score")
+            rerank_score = chunk.metadata.get("rerank_score")
             score_parts = []
             if isinstance(score, (int, float)):
                 score_parts.append(f"混合分 {score:.2f}")
@@ -933,6 +937,8 @@ class DeepResearchAgent:
                 score_parts.append(f"BM25 {bm25_score:.2f}")
             if isinstance(vector_score, (int, float)):
                 score_parts.append(f"向量 {vector_score:.2f}")
+            if isinstance(rerank_score, (int, float)):
+                score_parts.append(f"重排 {rerank_score:.2f}")
             score_text = f" · {' · '.join(score_parts)}" if score_parts else ""
             matched_terms = chunk.metadata.get("matched_terms") or []
             matched_text = ", ".join(str(term) for term in matched_terms[:8]) or "无显式关键词"

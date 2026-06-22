@@ -9,6 +9,7 @@ from config import Configuration
 from models import ResearchDocumentChunk
 from services.embeddings import EmbeddingProvider, EmbeddingService
 from services.repository import ResearchRepository
+from services.reranker import Reranker, create_reranker
 
 
 class Retriever(Protocol):
@@ -38,6 +39,8 @@ class RepositoryRetriever:
     limit: int = 5
     min_score: float = 0.0
     embedding_service: EmbeddingProvider | None = None
+    reranker: Reranker | None = None
+    rerank_top_n: int = 20
     calls: list[str] = field(default_factory=list)
 
     def retrieve(self, query: str) -> list[ResearchDocumentChunk]:
@@ -48,12 +51,19 @@ class RepositoryRetriever:
                 query_embedding = self.embedding_service.embed_query(query)
             except Exception:
                 query_embedding = None
-        return self.repository.search_document_chunks(
+        candidate_limit = self.rerank_top_n if self.reranker is not None else self.limit
+        chunks = self.repository.search_document_chunks(
             query,
-            limit=self.limit,
+            limit=candidate_limit,
             min_score=self.min_score,
             query_embedding=query_embedding,
         )
+        if self.reranker is None:
+            return chunks[: self.limit]
+        try:
+            return self.reranker.rerank(query, chunks, self.limit)
+        except Exception:
+            return chunks[: self.limit]
 
 
 def create_retriever(config: Configuration, repository: ResearchRepository) -> Retriever:
@@ -62,9 +72,17 @@ def create_retriever(config: Configuration, repository: ResearchRepository) -> R
     if not config.rag_enabled:
         return DisabledRetriever(config)
     embedding_service = EmbeddingService(config) if config.database_url and config.embedding_model else None
+    reranker = None
+    if config.rag_rerank_enabled:
+        try:
+            reranker = create_reranker(config.rag_rerank_model)
+        except Exception:
+            reranker = None
     return RepositoryRetriever(
         repository=repository,
         limit=max(1, min(config.rag_top_k, 20)),
         min_score=max(0.0, config.rag_min_score),
         embedding_service=embedding_service,
+        reranker=reranker,
+        rerank_top_n=max(config.rag_top_k, min(config.rag_rerank_top_n, 50)),
     )

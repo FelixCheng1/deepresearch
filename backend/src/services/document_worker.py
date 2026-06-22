@@ -13,7 +13,7 @@ from services.document_parser import DocumentParseError, parse_document
 from services.repository import ResearchRepository
 
 
-def process_one_document_job(repository: ResearchRepository) -> bool:
+def process_one_document_job(repository: ResearchRepository, config: Configuration | None = None) -> bool:
     job = repository.claim_next_document_job()
     if job is None:
         return False
@@ -26,6 +26,7 @@ def process_one_document_job(repository: ResearchRepository) -> bool:
             job.get("filename") or "document",
             job.get("content_type") or "application/octet-stream",
             payload,
+            config,
         )
         repository.complete_document_processing(
             job["document_id"],
@@ -57,7 +58,7 @@ def start_document_worker(
         repository = repository_factory(config)
         repository.reset_running_document_jobs()
         while not stop_event.is_set():
-            did_work = process_one_document_job(repository)
+            did_work = process_one_document_job(repository, config)
             if not did_work:
                 stop_event.wait(interval_seconds)
 

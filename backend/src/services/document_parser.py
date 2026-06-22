@@ -4,18 +4,19 @@ from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 
 class DocumentParseError(ValueError):
     """Raised when a document cannot produce searchable text."""
 
 
-def parse_document(filename: str, content_type: str, payload: bytes) -> tuple[str, str]:
+def parse_document(filename: str, content_type: str, payload: bytes, config: Any | None = None) -> tuple[str, str]:
     suffix = Path(filename).suffix.lower().lstrip(".")
     if suffix in {"txt", "md"}:
         return _parse_text(payload), _content_type_for_suffix(suffix, content_type)
     if suffix == "pdf":
-        return _parse_pdf(payload), "application/pdf"
+        return _parse_pdf(payload, config), "application/pdf"
     if suffix == "docx":
         return _parse_docx(payload), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     raise DocumentParseError("Only .txt, .md, .pdf and .docx documents are supported")
@@ -31,7 +32,16 @@ def _parse_text(payload: bytes) -> str:
     return text
 
 
-def _parse_pdf(payload: bytes) -> str:
+def _parse_pdf(payload: bytes, config: Any | None = None) -> str:
+    text = _extract_pdf_text(payload)
+    if text.strip():
+        return text
+    if not getattr(config, "pdf_ocr_enabled", False):
+        raise DocumentParseError("PDF has no searchable text; OCR is disabled")
+    return _ocr_pdf(payload, config)
+
+
+def _extract_pdf_text(payload: bytes) -> str:
     try:
         from pypdf import PdfReader
     except ImportError as exc:  # pragma: no cover - only hit when runtime deps are missing
@@ -42,9 +52,38 @@ def _parse_pdf(payload: bytes) -> str:
         pages = [(page.extract_text() or "").strip() for page in reader.pages]
     except Exception as exc:  # noqa: BLE001
         raise DocumentParseError("PDF parse failed") from exc
-    text = "\n\n".join(page for page in pages if page)
+    return "\n\n".join(page for page in pages if page)
+
+
+def _ocr_pdf(payload: bytes, config: Any) -> str:
+    try:
+        from pdf2image import convert_from_bytes
+        import pytesseract
+    except ImportError as exc:  # pragma: no cover - depends on optional runtime deps
+        raise DocumentParseError("PDF OCR requires optional dependencies: pdf2image, pytesseract and pillow") from exc
+
+    tesseract_cmd = getattr(config, "tesseract_cmd", None)
+    if tesseract_cmd:
+        pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+
+    try:
+        images = convert_from_bytes(
+            payload,
+            dpi=max(72, int(getattr(config, "pdf_ocr_dpi", 200))),
+            first_page=1,
+            last_page=max(1, int(getattr(config, "pdf_ocr_max_pages", 20))),
+            poppler_path=getattr(config, "poppler_path", None) or None,
+        )
+        parts = [
+            pytesseract.image_to_string(image, lang=getattr(config, "pdf_ocr_language", "chi_sim+eng")).strip()
+            for image in images
+        ]
+    except Exception as exc:  # noqa: BLE001
+        raise DocumentParseError("PDF OCR failed; check Tesseract and Poppler installation") from exc
+
+    text = "\n\n".join(part for part in parts if part)
     if not text.strip():
-        raise DocumentParseError("PDF has no searchable text; OCR is not supported yet")
+        raise DocumentParseError("PDF OCR produced no searchable text")
     return text
 
 
