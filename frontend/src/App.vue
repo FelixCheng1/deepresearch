@@ -6,185 +6,54 @@
       <span></span>
     </div>
 
-    <!-- 初始状态：居中输入卡片 -->
     <div v-if="!isExpanded" class="layout layout-centered">
-      <section class="panel panel-form panel-centered">
-        <header class="panel-head">
-          <div class="logo">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="M12 2.5c-.7 0-1.4.2-2 .6L4.6 7C3.6 7.6 3 8.7 3 9.9v4.2c0 1.2.6 2.3 1.6 2.9l5.4 3.9c1.2.8 2.8.8 4 0l5.4-3.9c1-.7 1.6-1.7 1.6-2.9V9.9c0-1.2-.6-2.3-1.6-2.9L14 3.1a3.6 3.6 0 0 0-2-.6Z"
-              />
-            </svg>
-          </div>
-          <div>
-            <h1>深度研究助手</h1>
-            <p>结合多轮智能检索与总结，实时呈现洞见与引用。</p>
-          </div>
-        </header>
-
-        <form class="form" @submit.prevent="handleSubmit">
-          <label class="field">
-            <span>研究主题</span>
-            <textarea
-              v-model="form.topic"
-              placeholder="例如：探索多模态模型在 2025 年的关键突破"
-              rows="4"
-              required
-            ></textarea>
-          </label>
-
-          <section class="options">
-            <label class="field option search-picker">
-              <span>搜索引擎</span>
-              <button
-                type="button"
-                class="search-select-button"
-                :class="{ open: searchMenuOpen }"
-                @click="searchMenuOpen = !searchMenuOpen"
-              >
-                <span>{{ selectedSearchLabel }}</span>
-                <span class="search-chevron">⌄</span>
-              </button>
-              <div v-if="searchMenuOpen" class="search-menu">
-                <button
-                  v-for="option in searchOptionItems"
-                  :key="option.value || 'default'"
-                  type="button"
-                  class="search-option"
-                  :class="{ active: form.searchApi === option.value }"
-                  @click="selectSearchApi(option.value)"
-                >
-                  <span class="search-option-name">{{ option.label }}</span>
-                  <span class="search-option-info" tabindex="0" @click.stop>!</span>
-                  <span class="search-option-tooltip">{{ option.detail }}</span>
-                </button>
-              </div>
-            </label>
-          </section>
-
-          <section class="home-document-library document-library">
-            <div class="document-library-head">
-              <label>文档库</label>
-              <span>{{ documents.length ? `${documents.length} 个文档可检索` : "未上传文档" }}</span>
-            </div>
-            <div class="document-dropzone">
-              <strong>{{ documents.length ? "研究将优先检索这些文档" : "先上传研究文档" }}</strong>
-              <p>{{ documentLoading ? "正在上传并解析..." : "支持 .txt / .md / .pdf / .docx，上传后会后台解析并进入 RAG 检索。" }}</p>
-              <label class="upload-button" :class="{ disabled: uploadDisabled }">
-                <input
-                  type="file"
-                  accept=".txt,.md,.pdf,.docx,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                  :disabled="uploadDisabled"
-                  @change="handleDocumentUpload"
-                />
-                {{ documentLoading ? "上传中..." : "选择文档" }}
-              </label>
-            </div>
-            <p v-if="documentSuccess" class="document-message success">{{ documentSuccess }}</p>
-            <p v-if="documentError" class="document-message error">{{ documentError }}</p>
-            <p v-if="!documents.length && !documentLoading" class="document-empty">暂无文档，仍可直接开始研究。</p>
-            <ul v-if="documents.length" class="document-list">
-              <li v-for="document in documents" :key="document.id">
-                <button
-                  type="button"
-                  class="document-item-button"
-                  :class="{ active: selectedDocumentId === document.id }"
-                  @click="selectDocument(document.id)"
-                >
-                  <span class="document-name" :title="document.filename">{{ document.filename }}</span>
-                  <span class="document-meta" :class="document.status">{{ documentStatusText(document) }}</span>
-                </button>
-              </li>
-            </ul>
-
-            <section v-if="selectedDocumentId" class="document-detail-panel">
-              <template v-if="documentDetailLoading">
-                <p class="document-empty">正在读取文档详情...</p>
-              </template>
-              <template v-else-if="selectedDocument">
-                <header class="document-detail-header">
-                  <div>
-                    <strong :title="selectedDocument.filename">{{ selectedDocument.filename }}</strong>
-                    <span :class="selectedDocument.status">{{ documentStatusText(selectedDocument) }}</span>
-                  </div>
-
-                  <button
-                    v-if="selectedDocument.status === 'failed'"
-                    type="button"
-                    class="document-delete-btn"
-                    :disabled="documentRetrying"
-                    @click="handleRetryDocument(selectedDocument.id)"
-                  >
-                    {{ documentRetrying ? "重试中..." : "重试解析" }}
-                  </button>
-                  <button
-                    type="button"
-                    class="document-delete-btn"
-                    :disabled="documentDeleting"
-                    @click="handleDeleteDocument(selectedDocument.id)"
-                  >
-                    {{ documentDeleting ? "删除中..." : "删除" }}
-                  </button>
-                </header>
-                <p class="document-preview">{{ documentPreviewText(selectedDocument) }}</p>
-                <div class="document-chunks">
-                  <button
-                    v-for="chunk in visibleDocumentChunks"
-                    :key="chunk.id"
-                    type="button"
-                    class="document-chunk"
-                    @click="toggleChunk(chunk.id)"
-                  >
-                    <span>片段 {{ chunk.chunk_index }}</span>
-                    <p>{{ expandedChunkIds.has(chunk.id) ? chunk.text : previewText(chunk.text) }}</p>
-                  </button>
-                </div>
-              </template>
-            </section>
-          </section>
-          <div class="form-actions">
-            <button class="submit" type="submit" :disabled="loading">
-              <span class="submit-label">
-                <svg
-                  v-if="loading"
-                  class="spinner"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <circle cx="12" cy="12" r="9" stroke-width="3" />
-                </svg>
-                {{ loading ? "研究进行中..." : "开始研究" }}
-              </span>
-            </button>
-            <button
-              v-if="loading"
-              type="button"
-              class="secondary-btn"
-              @click="cancelResearch"
-            >
-              取消研究
-            </button>
-          </div>
-        </form>
-
-        <p v-if="error" class="error-chip">
-          <svg viewBox="0 0 20 20" aria-hidden="true">
-            <path
-              d="M10 3.2c-.3 0-.6.2-.8.5L3.4 15c-.4.7.1 1.6.8 1.6h11.6c.7 0 1.2-.9.8-1.6L10.8 3.7c-.2-.3-.5-.5-.8-.5Zm0 4.3c.4 0 .7.3.7.7v4c0 .4-.3.7-.7.7s-.7-.3-.7-.7V8.2c0-.4.3-.7.7-.7Zm0 6.6a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z"
-            />
-          </svg>
-          {{ error }}
-        </p>
-        <p v-else-if="loading" class="hint muted">
-          正在收集线索与证据，实时进展见右侧区域。
-        </p>
-      </section>
+      <ResearchForm
+        :topic="form.topic"
+        :search-api="form.searchApi"
+        :search-menu-open="searchMenuOpen"
+        :selected-search-label="selectedSearchLabel"
+        :search-option-items="searchOptionItems"
+        :loading="loading"
+        :error="error"
+        @update:topic="form.topic = $event"
+        @update:search-api="form.searchApi = $event"
+        @update:search-menu-open="searchMenuOpen = $event"
+        @submit="handleSubmit"
+        @cancel="cancelResearch"
+      >
+        <template #documents>
+          <DocumentLibrary
+            variant="home"
+            :header-text="documents.length ? `${documents.length} 个文档可检索` : '未上传文档'"
+            :dropzone-title="documents.length ? '研究将优先检索这些文档' : '先上传研究文档'"
+            :dropzone-hint="documentLoading ? '正在上传并解析...' : '支持 .txt / .md / .pdf / .docx，上传后会后台解析并进入 RAG 检索。'"
+            empty-text="暂无文档，仍可直接开始研究。"
+            :documents="documents"
+            :document-loading="documentLoading"
+            :document-detail-loading="documentDetailLoading"
+            :document-deleting="documentDeleting"
+            :document-retrying="documentRetrying"
+            :upload-disabled="uploadDisabled"
+            :document-success="documentSuccess"
+            :document-error="documentError"
+            :selected-document-id="selectedDocumentId"
+            :selected-document="selectedDocument"
+            :visible-document-chunks="visibleDocumentChunks"
+            :expanded-chunk-ids="expandedChunkIds"
+            :document-status-text="documentStatusText"
+            :document-preview-text="documentPreviewText"
+            :preview-text="previewText"
+            @upload="handleDocumentUpload"
+            @select="selectDocument"
+            @retry="handleRetryDocument"
+            @delete="handleDeleteDocument"
+            @toggle-chunk="toggleChunk"
+          />
+        </template>
+      </ResearchForm>
     </div>
 
-    <!-- 全屏状态：左右分栏布局 -->
     <div v-else class="layout layout-fullscreen">
-      <!-- 左侧：研究信息 -->
       <aside class="sidebar">
         <div class="sidebar-header">
           <button class="back-btn" @click="goBack" :disabled="loading">
@@ -216,84 +85,34 @@
           </div>
 
           <div class="info-item document-library">
-            <div class="document-library-head">
-              <label>文档库</label>
-              <span>本次启动时 {{ researchDocumentCount }} 个文档可检索</span>
-            </div>
-            <div class="document-dropzone" :class="{ muted: loading }">
-              <strong>{{ documents.length ? `${documents.length} 个文档在库` : "暂无文档" }}</strong>
-              <p>{{ sidebarDocumentHint }}</p>
-              <label class="upload-button" :class="{ disabled: uploadDisabled }">
-                <input
-                  type="file"
-                  accept=".txt,.md,.pdf,.docx,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                  :disabled="uploadDisabled"
-                  @change="handleDocumentUpload"
-                />
-                {{ documentLoading ? "上传中..." : "选择文档" }}
-              </label>
-            </div>
-            <p v-if="documentSuccess" class="document-message success">{{ documentSuccess }}</p>
-            <p v-if="documentError" class="document-message error">{{ documentError }}</p>
-            <p v-if="!documents.length && !documentLoading" class="document-empty">暂无文档</p>
-            <ul v-if="documents.length" class="document-list">
-              <li v-for="document in documents" :key="document.id">
-                <button
-                  type="button"
-                  class="document-item-button"
-                  :class="{ active: selectedDocumentId === document.id }"
-                  @click="selectDocument(document.id)"
-                >
-                  <span class="document-name" :title="document.filename">{{ document.filename }}</span>
-                  <span class="document-meta" :class="document.status">{{ documentStatusText(document) }}</span>
-                </button>
-              </li>
-            </ul>
-
-            <section v-if="selectedDocumentId" class="document-detail-panel">
-              <template v-if="documentDetailLoading">
-                <p class="document-empty">正在读取文档详情...</p>
-              </template>
-              <template v-else-if="selectedDocument">
-                <header class="document-detail-header">
-                  <div>
-                    <strong :title="selectedDocument.filename">{{ selectedDocument.filename }}</strong>
-                    <span :class="selectedDocument.status">{{ documentStatusText(selectedDocument) }}</span>
-                  </div>
-
-                  <button
-                    v-if="selectedDocument.status === 'failed'"
-                    type="button"
-                    class="document-delete-btn"
-                    :disabled="documentRetrying"
-                    @click="handleRetryDocument(selectedDocument.id)"
-                  >
-                    {{ documentRetrying ? "重试中..." : "重试解析" }}
-                  </button>
-                  <button
-                    type="button"
-                    class="document-delete-btn"
-                    :disabled="documentDeleting"
-                    @click="handleDeleteDocument(selectedDocument.id)"
-                  >
-                    {{ documentDeleting ? "删除中..." : "删除" }}
-                  </button>
-                </header>
-                <p class="document-preview">{{ documentPreviewText(selectedDocument) }}</p>
-                <div class="document-chunks">
-                  <button
-                    v-for="chunk in visibleDocumentChunks"
-                    :key="chunk.id"
-                    type="button"
-                    class="document-chunk"
-                    @click="toggleChunk(chunk.id)"
-                  >
-                    <span>片段 {{ chunk.chunk_index }}</span>
-                    <p>{{ expandedChunkIds.has(chunk.id) ? chunk.text : previewText(chunk.text) }}</p>
-                  </button>
-                </div>
-              </template>
-            </section>
+            <DocumentLibrary
+              variant="sidebar"
+              :header-text="`本次启动时 ${researchDocumentCount} 个文档可检索`"
+              :dropzone-title="documents.length ? `${documents.length} 个文档在库` : '暂无文档'"
+              :dropzone-hint="sidebarDocumentHint"
+              empty-text="暂无文档"
+              :muted="loading"
+              :documents="documents"
+              :document-loading="documentLoading"
+              :document-detail-loading="documentDetailLoading"
+              :document-deleting="documentDeleting"
+              :document-retrying="documentRetrying"
+              :upload-disabled="uploadDisabled"
+              :document-success="documentSuccess"
+              :document-error="documentError"
+              :selected-document-id="selectedDocumentId"
+              :selected-document="selectedDocument"
+              :visible-document-chunks="visibleDocumentChunks"
+              :expanded-chunk-ids="expandedChunkIds"
+              :document-status-text="documentStatusText"
+              :document-preview-text="documentPreviewText"
+              :preview-text="previewText"
+              @upload="handleDocumentUpload"
+              @select="selectDocument"
+              @retry="handleRetryDocument"
+              @delete="handleDeleteDocument"
+              @toggle-chunk="toggleChunk"
+            />
           </div>
         </div>
 
@@ -307,7 +126,6 @@
         </div>
       </aside>
 
-      <!-- 右侧：研究结果 -->
       <section class="panel panel-result">
         <header class="status-bar">
           <div class="status-main">
@@ -319,277 +137,76 @@
               任务进度：{{ completedTasks }} / {{ totalTasks || todoTasks.length || 1 }}
             </span>
           </div>
-
         </header>
-
 
         <div class="result-workbench">
           <div class="content-column">
-            <section class="workflow-panel">
-              <div class="workflow-panel-header">
-                <div>
-                  <h3>LangGraph 并行工作流</h3>
-                  <p>{{ completedWorkflowNodes }} / {{ visibleWorkflowNodes.length }} 节点完成 · {{ workflowEdges.length }} 条边</p>
-                </div>
-                <button class="secondary-btn workflow-toggle" type="button" @click="workflowCollapsed = !workflowCollapsed">
-                  {{ workflowCollapsed ? "展开流程" : "收起流程" }}
-                </button>
-              </div>
-              <div v-show="!workflowCollapsed" class="workflow-map" role="list" aria-label="LangGraph 节点图">
-                <div class="workflow-global-row">
-                  <button
-                    v-for="node in globalWorkflowNodes"
-                    :key="node.key"
-                    type="button"
-                    :class="['graph-node', node.status, { selected: node.id === selectedWorkflowNodeId }]"
-                    @click="selectedWorkflowNodeId = node.id"
-                  >
-                    <span class="graph-node-dot"></span>
-                    <strong>{{ node.label }}</strong>
-                    <small>{{ node.detail || formatWorkflowStatus(node.status) }}</small>
-                  </button>
-                </div>
+            <WorkflowPanel
+              :collapsed="workflowCollapsed"
+              :completed-workflow-nodes="completedWorkflowNodes"
+              :visible-workflow-nodes="visibleWorkflowNodes"
+              :workflow-edges="workflowEdges"
+              :global-workflow-nodes="globalWorkflowNodes"
+              :task-workflow-rows="taskWorkflowRows"
+              :report-workflow-nodes="reportWorkflowNodes"
+              :selected-workflow-node-id="selectedWorkflowNodeId"
+              :format-workflow-status="formatWorkflowStatus"
+              @update:collapsed="workflowCollapsed = $event"
+              @select-node="selectedWorkflowNodeId = $event"
+              @select-task="activeTaskId = $event"
+            />
 
-                <div class="workflow-lanes" v-if="taskWorkflowRows.length">
-                  <section
-                    v-for="row in taskWorkflowRows"
-                    :key="row.task.id"
-                    class="workflow-lane"
-                  >
-                    <button
-                      type="button"
-                      class="workflow-lane-label"
-                      @click="activeTaskId = row.task.id"
-                    >
-                      <span>任务 {{ row.task.id }}</span>
-                      <strong>{{ row.task.title }}</strong>
-                    </button>
-                    <div class="workflow-lane-nodes">
-                      <button
-                        v-for="node in row.nodes"
-                        :key="node.key"
-                        type="button"
-                        :class="['graph-node', 'task-node', node.status, { selected: node.id === selectedWorkflowNodeId }]"
-                        @click="selectedWorkflowNodeId = node.id; activeTaskId = node.taskId"
-                      >
-                        <span class="graph-node-dot"></span>
-                        <strong>{{ node.label }}</strong>
-                        <small>{{ node.detail || formatWorkflowStatus(node.status) }}</small>
-                      </button>
-                    </div>
-                  </section>
-                </div>
+            <TaskSection
+              :todo-tasks="todoTasks"
+              :active-task-id="activeTaskId"
+              :current-task="currentTask"
+              :current-task-title="currentTaskTitle"
+              :current-task-intent="currentTaskIntent"
+              :current-task-query="currentTaskQuery"
+              :current-task-note-id="currentTaskNoteId"
+              :current-task-note-path="currentTaskNotePath"
+              :current-task-summary="currentTaskSummary"
+              :summary-highlight="summaryHighlight"
+              :format-task-status="formatTaskStatus"
+              @update:active-task-id="activeTaskId = $event"
+              @copy-note-path="copyNotePath"
+            />
 
-                <div class="workflow-global-row report-row">
-                  <button
-                    v-for="node in reportWorkflowNodes"
-                    :key="node.key"
-                    type="button"
-                    :class="['graph-node', node.status, { selected: node.id === selectedWorkflowNodeId }]"
-                    @click="selectedWorkflowNodeId = node.id"
-                  >
-                    <span class="graph-node-dot"></span>
-                    <strong>{{ node.label }}</strong>
-                    <small>{{ node.detail || formatWorkflowStatus(node.status) }}</small>
-                  </button>
-                </div>
-              </div>
-            </section>
-
-            <div class="tasks-section" v-if="todoTasks.length">
-              <aside class="tasks-list">
-                <h3>任务清单</h3>
-                <ul>
-                  <li
-                    v-for="task in todoTasks"
-                    :key="task.id"
-                    :class="['task-item', { active: task.id === activeTaskId, completed: task.status === 'completed' }]"
-                  >
-                    <button
-                      type="button"
-                      class="task-button"
-                      @click="activeTaskId = task.id"
-                    >
-                      <span class="task-title">{{ task.title }}</span>
-                      <span class="task-status" :class="task.status">
-                        {{ formatTaskStatus(task.status) }}
-                      </span>
-                    </button>
-                    <p class="task-intent">{{ task.intent }}</p>
-                  </li>
-                </ul>
-              </aside>
-
-              <article class="task-detail" v-if="currentTask">
-                <header class="task-header">
-                  <div>
-                    <h3>{{ currentTaskTitle || "当前任务" }}</h3>
-                    <p class="muted" v-if="currentTaskIntent">
-                      {{ currentTaskIntent }}
-                    </p>
-                  </div>
-                  <div class="task-chip-group">
-                    <span class="task-label">查询：{{ currentTaskQuery || "" }}</span>
-                    <span
-                      v-if="currentTaskNoteId"
-                      class="task-label note-chip"
-                      :title="currentTaskNoteId"
-                    >
-                      笔记：{{ currentTaskNoteId }}
-                    </span>
-                    <span
-                      v-if="currentTaskNotePath"
-                      class="task-label note-chip path-chip"
-                      :title="currentTaskNotePath"
-                    >
-                      <span class="path-label">路径：</span>
-                      <span class="path-text">{{ currentTaskNotePath }}</span>
-                      <button
-                        class="chip-action"
-                        type="button"
-                        @click="copyNotePath(currentTaskNotePath)"
-                      >
-                        复制
-                      </button>
-                    </span>
-                  </div>
-                </header>
-
-                <section v-if="currentTask && currentTask.notices.length" class="task-notices">
-                  <h4>系统提示</h4>
-                  <ul>
-                    <li v-for="(notice, idx) in currentTask.notices" :key="`${notice}-${idx}`">
-                      {{ notice }}
-                    </li>
-                  </ul>
-                </section>
-
-                <section
-                  class="summary-block"
-                  :class="{ 'block-highlight': summaryHighlight }"
-                >
-                  <h3>任务总结</h3>
-                  <pre class="block-pre">{{ currentTaskSummary || "暂无可用信息" }}</pre>
-                </section>
-              </article>
-
-              <article class="task-detail" v-else>
-                <p class="muted">等待任务规划或执行结果。</p>
-              </article>
-            </div>
-
-            <section
-              v-if="reportMarkdown"
-              class="report-block report-block-main"
-              :class="{ 'block-highlight': reportHighlight }"
-            >
-              <h3>最终报告</h3>
-              <div class="markdown-body" v-html="renderedReportHtml"></div>
-            </section>
+            <ReportBlock
+              :report-markdown="reportMarkdown"
+              :rendered-report-html="renderedReportHtml"
+              :report-highlight="reportHighlight"
+            />
           </div>
 
-          <aside class="evidence-column">
-            <section class="node-detail-block" v-if="selectedWorkflowNode">
-              <h3>节点详情</h3>
-              <p class="node-detail-title">{{ selectedWorkflowNode.label }}</p>
-              <p class="muted">
-                {{ selectedWorkflowNode.detail || formatWorkflowStatus(selectedWorkflowNode.status) }}
-              </p>
-              <p v-if="selectedWorkflowNode.taskId" class="muted">
-                关联任务：{{ selectedWorkflowNode.taskId }} · {{ workflowTaskTitle(selectedWorkflowNode.taskId) }}
-              </p>
-            </section>
-
-            <section
-              class="sources-block"
-              :class="{ 'block-highlight': sourcesHighlight }"
-            >
-              <h3>引用来源</h3>
-              <template v-if="currentTaskSources.length">
-                <ul class="sources-list">
-                  <li
-                    v-for="(item, index) in currentTaskSources"
-                    :key="`${item.title}-${index}`"
-                    class="source-item"
-                    :class="{ 'rag-hit': isDocumentSource(item) }"
-                  >
-                    <div class="source-headline">
-                      <a
-                        class="source-link"
-                        :href="item.url || '#'"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        {{ item.title || item.url || `来源 ${index + 1}` }}
-                      </a>
-                      <span v-if="isDocumentSource(item)" class="source-badge">RAG 命中片段</span>
-                    </div>
-                    <p v-if="isDocumentSource(item) && (item.snippet || item.raw)" class="source-snippet">
-                      {{ item.snippet || item.raw }}
-                    </p>
-                    <div v-if="item.snippet || item.raw" class="source-tooltip">
-                      <p v-if="item.snippet">{{ item.snippet }}</p>
-                      <p v-if="item.raw" class="muted-text">{{ item.raw }}</p>
-                    </div>
-                  </li>
-                </ul>
-              </template>
-              <p v-else class="muted">暂无可用来源</p>
-            </section>
-
-            <section
-              class="tools-block"
-              :class="{ 'block-highlight': toolHighlight }"
-              v-if="currentTaskToolCalls.length"
-            >
-              <h3>工具调用记录</h3>
-              <ul class="tool-list">
-                <li
-                  v-for="entry in currentTaskToolCalls"
-                  :key="`${entry.eventId}-${entry.timestamp}`"
-                  class="tool-entry"
-                >
-                  <div class="tool-entry-header">
-                    <span class="tool-entry-title">
-                      #{{ entry.eventId }} {{ entry.agent }} → {{ entry.tool }}
-                    </span>
-                    <span
-                      v-if="entry.noteId"
-                      class="tool-entry-note"
-                    >
-                      笔记：{{ entry.noteId }}
-                    </span>
-                  </div>
-                  <p v-if="entry.notePath" class="tool-entry-path">
-                    笔记路径：
-                    <button
-                      class="link-btn"
-                      type="button"
-                      @click="copyNotePath(entry.notePath)"
-                    >
-                      复制
-                    </button>
-                    <span class="path-text">{{ entry.notePath }}</span>
-                  </p>
-                  <p class="tool-subtitle">参数</p>
-                  <pre class="tool-pre">{{ formatToolParameters(entry.parameters) }}</pre>
-                  <template v-if="entry.result">
-                    <p class="tool-subtitle">执行结果</p>
-                    <pre class="tool-pre">{{ formatToolResult(entry.result) }}</pre>
-                  </template>
-                </li>
-              </ul>
-            </section>
-          </aside>
+          <EvidenceColumn
+            :selected-workflow-node="selectedWorkflowNode"
+            :current-task-sources="currentTaskSources"
+            :current-task-tool-calls="currentTaskToolCalls"
+            :sources-highlight="sourcesHighlight"
+            :tool-highlight="toolHighlight"
+            :format-workflow-status="formatWorkflowStatus"
+            :workflow-task-title="workflowTaskTitle"
+            :is-document-source="isDocumentSource"
+            :format-tool-parameters="formatToolParameters"
+            :format-tool-result="formatToolResult"
+            @copy-note-path="copyNotePath"
+          />
         </div>
       </section>
-
     </div>
   </main>
 </template>
 
 <script lang="ts" setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+
+import DocumentLibrary from "./components/DocumentLibrary.vue";
+import EvidenceColumn from "./components/EvidenceColumn.vue";
+import ReportBlock from "./components/ReportBlock.vue";
+import ResearchForm from "./components/ResearchForm.vue";
+import TaskSection from "./components/TaskSection.vue";
+import WorkflowPanel from "./components/WorkflowPanel.vue";
 
 import {
   deleteDocument,
@@ -602,57 +219,7 @@ import {
   type DocumentSummary,
   type ResearchStreamEvent
 } from "./services/api";
-
-interface SourceItem {
-  title: string;
-  url: string;
-  snippet: string;
-  raw: string;
-}
-
-interface ToolCallLog {
-  eventId: number;
-  agent: string;
-  tool: string;
-  parameters: Record<string, unknown>;
-  result: string;
-  noteId: string | null;
-  notePath: string | null;
-  timestamp: number;
-}
-
-interface TodoTaskView {
-  id: number;
-  title: string;
-  intent: string;
-  query: string;
-  status: string;
-  summary: string;
-  sourcesSummary: string;
-  sourceItems: SourceItem[];
-  notices: string[];
-  noteId: string | null;
-  notePath: string | null;
-  toolCalls: ToolCallLog[];
-}
-
-interface WorkflowNodeView {
-  key: string;
-  id: string;
-  node: string;
-  label: string;
-  status: string;
-  detail: string;
-  scope: string;
-  taskId: number | null;
-  taskTitle: string;
-  dependsOn: string[];
-}
-
-interface WorkflowEdgeView {
-  from: string;
-  to: string;
-}
+import type { SourceItem, TodoTaskView, ToolCallLog, WorkflowEdgeView, WorkflowNodeView } from "./types";
 
 const form = reactive({
   topic: "",
@@ -1210,6 +777,7 @@ function applyWorkflowGraph(payload: Record<string, unknown>) {
     const id =
       extractOptionalString(item.id) ??
       extractOptionalString(item.node) ??
+      
       `node-${workflowNodes.value.length}-${Date.now()}`;
     const rawTaskId = item.task_id;
     const taskId =
@@ -1804,7 +1372,7 @@ onBeforeUnmount(() => {
 </script>
 
 
-<style scoped>
+<style>
 .app-shell {
   --bg: #f7f8fb;
   --surface: #ffffff;

@@ -36,6 +36,31 @@ class Configuration(BaseModel):
         title="搜索 API",
         description="要使用的网络搜索 API",
     )
+    cors_origins: str = Field(
+        default="http://localhost:5173,http://localhost:3000",
+        title="CORS 来源白名单",
+        description="允许访问后端的前端来源，使用逗号分隔。",
+    )
+    host: str = Field(
+        default="0.0.0.0",
+        title="服务监听地址",
+        description="Uvicorn 启动时绑定的主机地址。",
+    )
+    port: int = Field(
+        default=8000,
+        title="服务端口",
+        description="Uvicorn 启动时监听的端口。",
+    )
+    log_level: str = Field(
+        default="INFO",
+        title="日志级别",
+        description="应用日志级别。",
+    )
+    llm_timeout: float = Field(
+        default=60,
+        title="LLM 超时时间",
+        description="OpenAI 兼容聊天模型请求超时时间（秒）。",
+    )
     enable_notes: bool = Field(
         default=True,
         title="启用笔记",
@@ -223,6 +248,11 @@ class Configuration(BaseModel):
             "strip_thinking_tokens": os.getenv("STRIP_THINKING_TOKENS"),
             "use_tool_calling": os.getenv("USE_TOOL_CALLING"),
             "search_api": os.getenv("SEARCH_API"),
+            "cors_origins": os.getenv("CORS_ORIGINS"),
+            "host": os.getenv("HOST"),
+            "port": os.getenv("PORT"),
+            "log_level": os.getenv("LOG_LEVEL"),
+            "llm_timeout": os.getenv("LLM_TIMEOUT"),
             "enable_notes": os.getenv("ENABLE_NOTES"),
             "notes_workspace": os.getenv("NOTES_WORKSPACE"),
             "database_url": os.getenv("DATABASE_URL"),
@@ -259,6 +289,12 @@ class Configuration(BaseModel):
                     raw_values[key] = value
 
         return cls(**raw_values)
+
+    def cors_origin_list(self) -> list[str]:
+        """返回 CORS 来源白名单。"""
+
+        origins = [origin.strip() for origin in self.cors_origins.split(",")]
+        return [origin for origin in origins if origin]
 
     def sanitized_ollama_url(self) -> str:
         """确保 Ollama 基础地址包含 OpenAI 客户端需要的 /v1 后缀。"""

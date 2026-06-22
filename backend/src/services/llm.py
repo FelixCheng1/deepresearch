@@ -26,6 +26,7 @@ def create_chat_model(config: Configuration) -> ChatOpenAI:
         api_key=api_key or "not-needed",
         base_url=base_url,
         temperature=0,
+        timeout=config.llm_timeout,
     )
 
 

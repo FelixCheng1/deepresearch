@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+from contextlib import asynccontextmanager
 from email import policy
 from email.parser import BytesParser
 from typing import Any, Dict, Iterator, Optional
@@ -25,7 +27,7 @@ from services.repository import ResearchRepository, create_research_repository
 # 添加控制台日志处理程序
 logger.add(
     sys.stderr,
-    level="INFO",
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
     format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <4}</level> | <cyan>using_function:{function}</cyan> | <cyan>{file}:{line}</cyan> | <level>{message}</level>",
     colorize=True,
 )
@@ -108,25 +110,16 @@ def _build_config(payload: ResearchRequest) -> Configuration:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="LangGraph Deep Researcher")
-    memory_config = Configuration.from_env()
-    memory_repository: ResearchRepository = create_research_repository(memory_config)
+    app_config = Configuration.from_env()
+    memory_repository: ResearchRepository = create_research_repository(app_config)
 
     def get_repository(config: Configuration) -> ResearchRepository:
         if config.database_url:
             return create_research_repository(config)
         return memory_repository
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    @app.on_event("startup")
-    def log_startup_configuration() -> None:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
         config = Configuration.from_env()
 
         if config.llm_provider == "ollama":
@@ -155,15 +148,21 @@ def create_app() -> FastAPI:
         )
         app.state.document_worker_stop = stop_event
         app.state.document_worker = worker
-
-    @app.on_event("shutdown")
-    def stop_document_worker() -> None:
-        stop_event = getattr(app.state, "document_worker_stop", None)
-        worker = getattr(app.state, "document_worker", None)
-        if stop_event is not None:
+        try:
+            yield
+        finally:
             stop_event.set()
-        if worker is not None:
             worker.join(timeout=2)
+
+    app = FastAPI(title="LangGraph Deep Researcher", lifespan=lifespan)
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=app_config.cors_origin_list(),
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.get("/healthz")
     def health_check() -> Dict[str, str]:
@@ -332,17 +331,16 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    import os
-
     import uvicorn
 
+    config = Configuration.from_env()
     # Windows 下 reload 会启动子进程并重新导入 LangGraph，直接运行脚本时默认关闭更稳。
     reload_enabled = os.getenv("UVICORN_RELOAD", "").lower() in {"1", "true", "yes"}
 
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", "8000")),
+        host=config.host,
+        port=config.port,
         reload=reload_enabled,
-        log_level="info"
+        log_level=config.log_level.lower(),
     )

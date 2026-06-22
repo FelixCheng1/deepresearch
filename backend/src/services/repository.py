@@ -401,7 +401,7 @@ class PostgresResearchRepository:
 
         if engine is None:
             if not database_url:
-                raise ValueError("缂哄皯 DATABASE_URL锛屾棤娉曞垱寤?Postgres 浠撳簱")
+                raise ValueError("缺少 DATABASE_URL，无法创建 Postgres 仓库")
             engine = create_database_engine(database_url)
         self._session_factory = create_session_factory(engine)
 
