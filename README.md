@@ -12,6 +12,7 @@
 - 文档库：上传 `.txt` / `.md` / `.pdf` / `.docx`、后台解析、列表、详情、chunk 预览、删除、失败重试
 - 持久化：内存仓库或 Postgres + pgvector
 - RAG：轻量文本排序；配置 embedding 后写入向量字段并参与混合排序
+- RAG 评测：内置小规模检索评测集，输出 Recall@K 和 MRR
 
 ## 目录结构
 
@@ -181,16 +182,20 @@ npm run dev
 cd backend
 uv run pytest
 uv run alembic heads
+uv run python src/rag_eval_cli.py
+uv run python src/rag_eval_cli.py --json
 ```
+
+RAG 评测使用内置文档和 query，不依赖数据库、LLM、embedding API 或网络。指标含义：
+
+- `Recall@K`：前 K 个检索结果中是否包含期望文档，越高表示召回越稳定。
+- `MRR`：期望文档排名的倒数均值，越高表示正确文档越靠前。
 
 ```powershell
 cd frontend
 .\node_modules\.bin\vue-tsc.cmd --noEmit
 npm run build
 ```
-
-如果 `npm run build` 在 Windows 上报 `esbuild spawn EPERM`，先确认 `vue-tsc` 是否通过；该错误通常是本机权限或杀毒软件拦截 esbuild 子进程，不是 TypeScript 类型错误。
-
 ## 最终验收清单
 
 - 上传 `.txt` / `.md` / `.pdf` / `.docx` 后，文档状态能从“解析中”变为“可检索”。
@@ -198,7 +203,7 @@ npm run build
 - 开始研究后，LangGraph 工作流一开始就显示，且可以收起/展开。
 - 引用来源中出现本地 `document://...#chunk-...` 时，前端标记为 RAG 命中片段。
 - 最终报告以 Markdown 样式渲染，标题、列表、代码和链接可读。
-- 后端测试、Alembic head、前端类型检查通过。
+- 后端测试、Alembic head、RAG 检索评测、前端类型检查通过。
 
 ## 数据库说明
 
@@ -209,4 +214,4 @@ npm run build
 - 不要提交 `.env`、`frontend/.env.local`、`notes/`、`node_modules/`、`.venv/`。
 - 没有 `DATABASE_URL` 时，后端使用内存仓库，适合快速演示。
 - 配置 Postgres 后先跑 `uv run alembic upgrade head`。
-- 当前 FastAPI `on_event` 有 deprecated warning，不影响运行；真要清 warning 再换 lifespan。
+- 后端使用 FastAPI lifespan 管理后台文档 worker 的启动和停止。
