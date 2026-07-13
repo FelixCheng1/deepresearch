@@ -6,12 +6,12 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from models import SummaryState
 from config import Configuration
+from models import SummaryState
 from prompts import report_writer_instructions
 from services.llm import message_content
-from utils import strip_thinking_tokens
 from services.text_processing import strip_tool_calls
+from utils import strip_thinking_tokens
 
 
 class ReportingService:

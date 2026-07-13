@@ -57,8 +57,8 @@ def _extract_pdf_text(payload: bytes) -> str:
 
 def _ocr_pdf(payload: bytes, config: Any) -> str:
     try:
-        from pdf2image import convert_from_bytes
         import pytesseract
+        from pdf2image import convert_from_bytes
     except ImportError as exc:  # pragma: no cover - depends on optional runtime deps
         raise DocumentParseError("PDF OCR requires optional dependencies: pdf2image, pytesseract and pillow") from exc
 

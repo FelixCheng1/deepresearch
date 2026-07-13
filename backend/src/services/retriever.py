@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -10,6 +11,8 @@ from models import ResearchDocumentChunk
 from services.embeddings import EmbeddingProvider, EmbeddingService
 from services.repository import ResearchRepository
 from services.reranker import Reranker, create_reranker
+
+logger = logging.getLogger(__name__)
 
 
 class Retriever(Protocol):
@@ -49,7 +52,8 @@ class RepositoryRetriever:
         if self.embedding_service is not None:
             try:
                 query_embedding = self.embedding_service.embed_query(query)
-            except Exception:
+            except Exception as exc:
+                logger.warning("Query embedding failed; falling back to lexical retrieval: %s", exc)
                 query_embedding = None
         candidate_limit = self.rerank_top_n if self.reranker is not None else self.limit
         chunks = self.repository.search_document_chunks(
@@ -62,7 +66,8 @@ class RepositoryRetriever:
             return chunks[: self.limit]
         try:
             return self.reranker.rerank(query, chunks, self.limit)
-        except Exception:
+        except Exception as exc:
+            logger.warning("Reranking failed; keeping first-stage ranking: %s", exc)
             return chunks[: self.limit]
 
 
@@ -76,7 +81,8 @@ def create_retriever(config: Configuration, repository: ResearchRepository) -> R
     if config.rag_rerank_enabled:
         try:
             reranker = create_reranker(config.rag_rerank_model)
-        except Exception:
+        except Exception as exc:
+            logger.warning("Reranker initialization failed; reranking is disabled: %s", exc)
             reranker = None
     return RepositoryRetriever(
         repository=repository,

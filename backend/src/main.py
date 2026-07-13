@@ -8,21 +8,21 @@ import sys
 from contextlib import asynccontextmanager
 from email import policy
 from email.parser import BytesParser
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Dict, Iterator
 
 from dotenv import load_dotenv
-load_dotenv()
-
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from config import Configuration, SearchAPI
 from agent import DeepResearchAgent
+from config import Configuration, SearchAPI
 from services.document_worker import start_document_worker
 from services.repository import ResearchRepository, create_research_repository
+
+load_dotenv()
 
 # 添加控制台日志处理程序
 logger.add(
@@ -64,7 +64,7 @@ class ResearchResponse(BaseModel):
     )
 
 
-def _mask_secret(value: Optional[str], visible: int = 4) -> str:
+def _mask_secret(value: str | None, visible: int = 4) -> str:
     """遮盖敏感令牌，同时保留首尾少量字符。"""
     if not value:
         return "unset"
@@ -85,7 +85,7 @@ async def _read_uploaded_file(request: Request) -> tuple[str, str, bytes]:
         raise HTTPException(status_code=400, detail="请使用 multipart/form-data 上传文档")
 
     raw_message = (
-        f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8")
+        f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode()
         + body
     )
     message = BytesParser(policy=policy.default).parsebytes(raw_message)

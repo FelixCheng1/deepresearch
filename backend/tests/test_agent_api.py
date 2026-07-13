@@ -4,11 +4,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from helpers import make_notes_dir
+
 import agent as agent_module
 import main as main_module
 from config import Configuration
 from services.repository import InMemoryResearchRepository
-from helpers import make_notes_dir
 
 
 class Response:
@@ -100,6 +101,10 @@ def test_agent_run_with_mock_llm_and_search(monkeypatch):
     assert "最终报告" in result.report_markdown
     assert result.todo_items[0].status == "completed"
     assert repo.reports[deep_agent.run_id].markdown == result.report_markdown
+    run_detail = repo.get_run(deep_agent.run_id)
+    assert run_detail["tasks"][0]["summary"]
+    assert run_detail["tasks"][0]["sources_summary"]
+    assert run_detail["tool_calls"]
 
 
 def test_agent_stream_preserves_frontend_event_protocol(monkeypatch):
@@ -285,6 +290,16 @@ def test_fastapi_research_endpoint_with_mock_agent(monkeypatch):
 def test_fastapi_research_runs_endpoints(monkeypatch):
     repo = InMemoryResearchRepository()
     repo.save_run(agent_module.ResearchRun(id="run-api", topic="topic", search_api="duckduckgo"))
+    repo.save_tool_call(
+        agent_module.ResearchToolCall(
+            run_id="run-api",
+            event_id=1,
+            agent="research",
+            tool="search",
+            parameters={"query": "topic"},
+            result="ok",
+        )
+    )
     repo.save_report(agent_module.ResearchReport(run_id="run-api", markdown="# 报告"))
 
     monkeypatch.setattr(main_module, "create_research_repository", lambda config: repo)
@@ -301,4 +316,5 @@ def test_fastapi_research_runs_endpoints(monkeypatch):
     assert list_response.json()["runs"][0]["id"] == "run-api"
     assert detail_response.status_code == 200
     assert detail_response.json()["report"]["markdown"] == "# 报告"
+    assert detail_response.json()["tool_calls"][0]["tool"] == "search"
     assert missing_response.status_code == 404

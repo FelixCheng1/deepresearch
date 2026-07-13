@@ -5,13 +5,17 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, List, Optional
+from typing import Any, List
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from models import SummaryState, TodoItem
 from config import Configuration
-from prompts import get_current_date, todo_planner_instructions, todo_planner_system_prompt
+from models import SummaryState, TodoItem
+from prompts import (
+    get_current_date,
+    todo_planner_instructions,
+    todo_planner_system_prompt,
+)
 from services.llm import message_content
 from utils import strip_thinking_tokens
 
@@ -159,7 +163,7 @@ class PlanningService:
 
         return tasks
 
-    def _extract_json_payload(self, text: str) -> Optional[dict[str, Any] | list]:
+    def _extract_json_payload(self, text: str) -> dict[str, Any] | list | None:
         """尝试从文本中定位并解析 JSON 对象或数组。"""
 
         start = text.find("{")
@@ -182,7 +186,7 @@ class PlanningService:
 
         return None
 
-    def _extract_tool_payload(self, text: str) -> Optional[dict[str, Any]]:
+    def _extract_tool_payload(self, text: str) -> dict[str, Any] | None:
         """解析输出中的第一个 TOOL_CALL 表达式。"""
 
         match = TOOL_CALL_PATTERN.search(text)

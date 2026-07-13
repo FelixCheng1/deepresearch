@@ -169,7 +169,7 @@ npm run dev
 | `POST` | `/research` | 非流式研究 |
 | `POST` | `/research/stream` | SSE 流式研究 |
 | `GET` | `/research/runs?limit=20` | 研究历史列表 |
-| `GET` | `/research/runs/{run_id}` | 研究历史详情 |
+| `GET` | `/research/runs/{run_id}` | 研究历史详情（任务、来源、报告、工具调用） |
 | `POST` | `/documents/upload` | 上传文档 |
 | `GET` | `/documents` | 文档列表 |
 | `GET` | `/documents/{document_id}` | 文档详情和 chunks |
@@ -184,12 +184,14 @@ uv run pytest
 uv run alembic heads
 uv run python src/rag_eval_cli.py
 uv run python src/rag_eval_cli.py --json
+uv run python src/rag_eval_cli.py --dataset eval/rag-dataset.json --fail-below-recall 0.8 --fail-below-mrr 0.6
 ```
 
-RAG 评测使用内置文档和 query，不依赖数据库、LLM、embedding API 或网络。指标含义：
+默认 RAG 评测使用内置 smoke 数据，不依赖数据库、LLM、embedding API 或网络，只用于验证评测链路，不代表生产检索质量。正式比较应传入版本化 JSON 数据集；格式和门禁用法见 [RAG 评测说明](docs/rag-evaluation.md)。指标含义：
 
 - `Recall@K`：前 K 个检索结果中是否包含期望文档，越高表示召回越稳定。
 - `MRR`：期望文档排名的倒数均值，越高表示正确文档越靠前。
+- `expected_terms_coverage`：期望证据词是否出现在目标文档召回片段中。
 
 ```powershell
 cd frontend
@@ -202,6 +204,7 @@ npm run build
 - 上传空 PDF 或无法解析文档时，状态显示“解析失败”，并可点击重试。
 - 开始研究后，LangGraph 工作流一开始就显示，且可以收起/展开。
 - 引用来源中出现本地 `document://...#chunk-...` 时，前端标记为 RAG 命中片段。
+- 研究历史详情包含按 `event_id` 排序的结构化 `tool_calls`，可用于审计和回放。
 - 最终报告以 Markdown 样式渲染，标题、列表、代码和链接可读。
 - 后端测试、Alembic head、RAG 检索评测、前端类型检查通过。
 

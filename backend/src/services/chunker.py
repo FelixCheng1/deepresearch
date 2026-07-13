@@ -34,7 +34,7 @@ def chunk_text(text: str, *, max_chars: int = 1200, overlap: int = 120) -> list[
         return chunks
 
     overlapped: list[str] = [chunks[0]]
-    for previous, chunk in zip(chunks, chunks[1:]):
+    for previous, chunk in zip(chunks, chunks[1:], strict=False):
         prefix = previous[-overlap:].strip()
         overlapped.append(f"{prefix}\n\n{chunk}".strip() if prefix else chunk)
     return overlapped

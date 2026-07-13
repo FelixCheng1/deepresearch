@@ -15,6 +15,75 @@ export interface StreamOptions {
   signal?: AbortSignal;
 }
 
+export interface ResearchRunSummary {
+  id: string;
+  topic: string;
+  search_api: string;
+  created_at: string;
+}
+
+export interface ResearchRunTask {
+  task_id: number;
+  title: string;
+  intent: string;
+  query: string;
+  status: string;
+  summary: string | null;
+  sources_summary: string | null;
+  note_id: string | null;
+  note_path: string | null;
+}
+
+export interface ResearchRunSource {
+  id?: number;
+  task_id: number;
+  title: string;
+  url: string;
+  content: string;
+}
+
+export interface ResearchRunToolCall {
+  event_id: number;
+  agent: string;
+  tool: string;
+  parameters: Record<string, unknown>;
+  result: string;
+  task_id: number | null;
+  note_id: string | null;
+  step: number | null;
+  created_at: string;
+}
+
+export interface ResearchRunDetail extends ResearchRunSummary {
+  tasks: ResearchRunTask[];
+  sources: ResearchRunSource[];
+  report: {
+    markdown: string;
+    note_id: string | null;
+    note_path: string | null;
+  } | null;
+  tool_calls: ResearchRunToolCall[];
+}
+
+export async function listResearchRuns(limit = 20): Promise<ResearchRunSummary[]> {
+  const response = await fetch(`${baseURL}/research/runs?limit=${limit}`);
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(errorText || `研究历史请求失败，状态码：${response.status}`);
+  }
+  const payload = await response.json() as { runs: ResearchRunSummary[] };
+  return payload.runs;
+}
+
+export async function getResearchRun(runId: string): Promise<ResearchRunDetail> {
+  const response = await fetch(`${baseURL}/research/runs/${encodeURIComponent(runId)}`);
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(errorText || `研究历史请求失败，状态码：${response.status}`);
+  }
+  return await response.json() as ResearchRunDetail;
+}
+
 export async function runResearchStream(
   payload: ResearchRequest,
   onEvent: (event: ResearchStreamEvent) => void,

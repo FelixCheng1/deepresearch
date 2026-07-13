@@ -3,7 +3,7 @@
 import operator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List
 
 from typing_extensions import Annotated
 
@@ -17,12 +17,12 @@ class TodoItem:
     intent: str
     query: str
     status: str = field(default="pending")
-    summary: Optional[str] = field(default=None)
-    sources_summary: Optional[str] = field(default=None)
+    summary: str | None = field(default=None)
+    sources_summary: str | None = field(default=None)
     notices: list[str] = field(default_factory=list)
-    note_id: Optional[str] = field(default=None)
-    note_path: Optional[str] = field(default=None)
-    stream_token: Optional[str] = field(default=None)
+    note_id: str | None = field(default=None)
+    note_path: str | None = field(default=None)
+    stream_token: str | None = field(default=None)
 
 
 @dataclass(kw_only=True)
@@ -34,16 +34,16 @@ class SummaryState:
     research_loop_count: int = field(default=0)  # 研究循环次数
     running_summary: str = field(default=None)  # 兼容旧接口的总结字段
     todo_items: Annotated[list, operator.add] = field(default_factory=list)
-    structured_report: Optional[str] = field(default=None)
-    report_note_id: Optional[str] = field(default=None)
-    report_note_path: Optional[str] = field(default=None)
+    structured_report: str | None = field(default=None)
+    report_note_id: str | None = field(default=None)
+    report_note_path: str | None = field(default=None)
     current_task_index: int = field(default=0)
-    current_task_id: Optional[int] = field(default=None)
+    current_task_id: int | None = field(default=None)
     current_context: str = field(default="")
     current_sources_summary: str = field(default="")
-    current_search_result: Optional[dict] = field(default=None)
-    current_answer_text: Optional[str] = field(default=None)
-    current_search_backend: Optional[str] = field(default=None)
+    current_search_result: dict | None = field(default=None)
+    current_answer_text: str | None = field(default=None)
+    current_search_backend: str | None = field(default=None)
     current_retrieval_context: str = field(default="")
     stream_events: list[dict] = field(default_factory=list)
 
@@ -56,7 +56,7 @@ class SummaryStateInput:
 @dataclass(kw_only=True)
 class SummaryStateOutput:
     running_summary: str = field(default=None)  # 向后兼容的文本
-    report_markdown: Optional[str] = field(default=None)
+    report_markdown: str | None = field(default=None)
     todo_items: List[TodoItem] = field(default_factory=list)
 
 
@@ -80,8 +80,10 @@ class ResearchTask:
     intent: str
     query: str
     status: str
-    note_id: Optional[str] = None
-    note_path: Optional[str] = None
+    summary: str | None = None
+    sources_summary: str | None = None
+    note_id: str | None = None
+    note_path: str | None = None
 
 
 @dataclass(kw_only=True)
@@ -101,8 +103,24 @@ class ResearchReport:
 
     run_id: str
     markdown: str
-    note_id: Optional[str] = None
-    note_path: Optional[str] = None
+    note_id: str | None = None
+    note_path: str | None = None
+
+
+@dataclass(kw_only=True)
+class ResearchToolCall:
+    """一次可回放的工具调用事件。"""
+
+    run_id: str
+    event_id: int
+    agent: str
+    tool: str
+    parameters: dict = field(default_factory=dict)
+    result: str = ""
+    task_id: int | None = None
+    note_id: str | None = None
+    step: int | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass(kw_only=True)
@@ -116,8 +134,8 @@ class ResearchDocumentChunk:
     text: str
     metadata: dict = field(default_factory=dict)
     embedding: list[float] | None = None
-    embedding_model: Optional[str] = None
-    embedded_at: Optional[datetime] = None
+    embedding_model: str | None = None
+    embedded_at: datetime | None = None
 
 
 @dataclass(kw_only=True)
@@ -129,9 +147,9 @@ class ResearchDocument:
     content_type: str
     size_bytes: int
     raw_text: str = ""
-    summary: Optional[str] = None
+    summary: str | None = None
     status: str = "ready"
-    error_message: Optional[str] = None
-    processed_at: Optional[datetime] = None
+    error_message: str | None = None
+    processed_at: datetime | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     chunks: list[ResearchDocumentChunk] = field(default_factory=list)

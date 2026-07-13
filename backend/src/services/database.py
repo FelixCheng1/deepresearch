@@ -4,9 +4,25 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import LargeBinary, DateTime, ForeignKey, Integer, JSON, String, Text, create_engine
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    ForeignKey,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+    create_engine,
+)
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    mapped_column,
+    relationship,
+    sessionmaker,
+)
 from sqlalchemy.types import UserDefinedType
 
 
@@ -70,6 +86,11 @@ class ResearchRunRow(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
+    tool_calls: Mapped[list[ResearchToolCallRow]] = relationship(
+        back_populates="run",
+        cascade="all, delete-orphan",
+        order_by="ResearchToolCallRow.event_id",
+    )
 
 
 class ResearchTaskRow(Base):
@@ -89,6 +110,8 @@ class ResearchTaskRow(Base):
     intent: Mapped[str] = mapped_column(Text, nullable=False)
     query: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sources_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     note_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     note_path: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -130,6 +153,38 @@ class ResearchReportRow(Base):
     note_path: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     run: Mapped[ResearchRunRow] = relationship(back_populates="report")
+
+
+class ResearchToolCallRow(Base):
+    """研究运行中的结构化工具调用。"""
+
+    __tablename__ = "research_tool_calls"
+    __table_args__ = (
+        UniqueConstraint("run_id", "event_id", name="uq_research_tool_calls_run_event"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("research_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    event_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    agent: Mapped[str] = mapped_column(String(128), nullable=False)
+    tool: Mapped[str] = mapped_column(String(128), nullable=False)
+    parameters: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    result: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    task_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    note_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    step: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    run: Mapped[ResearchRunRow] = relationship(back_populates="tool_calls")
 
 
 class DocumentRow(Base):

@@ -38,6 +38,7 @@
       </section>
 
       <slot name="documents"></slot>
+      <slot name="history"></slot>
 
       <div class="form-actions">
         <button class="submit" type="submit" :disabled="loading">

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from services.repository import InMemoryResearchRepository
@@ -24,6 +26,16 @@ class RagEvalCase:
     query: str
     expected_document: str
     expected_terms: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RagEvalDataset:
+    """A named retrieval dataset loaded from a versioned JSON file."""
+
+    name: str
+    documents: tuple[RagEvalDocument, ...]
+    cases: tuple[RagEvalCase, ...]
+    sample_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -162,9 +174,13 @@ def evaluate_retrieval(
     *,
     top_k: int = 3,
     min_score: float = 0.1,
+    dataset_name: str = "builtin-smoke",
+    sample_only: bool | None = None,
 ) -> RagEvalReport:
     """Run a deterministic document-level retrieval evaluation."""
 
+    if sample_only is None:
+        sample_only = cases is DEFAULT_EVAL_CASES and documents is DEFAULT_DOCUMENTS
     safe_top_k = max(1, min(top_k, 20))
     repo = InMemoryResearchRepository()
     for document in documents:
@@ -197,14 +213,110 @@ def evaluate_retrieval(
 
     query_count = len(results)
     hits = sum(1 for result in results if result.hit)
+    terms_found = sum(1 for result in results if result.expected_terms_found)
     mrr = sum(result.reciprocal_rank for result in results) / query_count if query_count else 0.0
     summary = {
+        "dataset": dataset_name,
+        "sample_only": sample_only,
         "query_count": query_count,
+        "hit_count": hits,
+        "miss_count": query_count - hits,
         "top_k": safe_top_k,
         "recall_at_k": round(hits / query_count, 4) if query_count else 0.0,
         "mrr": round(mrr, 4),
+        "expected_terms_coverage": round(terms_found / query_count, 4) if query_count else 0.0,
     }
     return RagEvalReport(summary=summary, cases=results)
+
+
+def evaluate_dataset(
+    dataset: RagEvalDataset,
+    *,
+    top_k: int = 3,
+    min_score: float = 0.1,
+) -> RagEvalReport:
+    """Evaluate a named dataset while preserving its provenance in the report."""
+
+    return evaluate_retrieval(
+        dataset.cases,
+        dataset.documents,
+        top_k=top_k,
+        min_score=min_score,
+        dataset_name=dataset.name,
+        sample_only=dataset.sample_only,
+    )
+
+
+def load_eval_dataset(path: str | Path) -> RagEvalDataset:
+    """Load and validate a retrieval evaluation dataset from JSON."""
+
+    dataset_path = Path(path)
+    try:
+        payload = json.loads(dataset_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"无法读取评测数据集 {dataset_path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("评测数据集根节点必须是 JSON 对象")
+
+    name = _required_string(payload, "name", "评测数据集")
+    raw_documents = payload.get("documents")
+    raw_cases = payload.get("cases")
+    if not isinstance(raw_documents, list) or not raw_documents:
+        raise ValueError("评测数据集 documents 必须是非空数组")
+    if not isinstance(raw_cases, list) or not raw_cases:
+        raise ValueError("评测数据集 cases 必须是非空数组")
+
+    documents: list[RagEvalDocument] = []
+    for index, item in enumerate(raw_documents, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"documents[{index}] 必须是对象")
+        documents.append(
+            RagEvalDocument(
+                title=_required_string(item, "title", f"documents[{index}]"),
+                text=_required_string(item, "text", f"documents[{index}]"),
+            )
+        )
+    titles = [document.title for document in documents]
+    if len(titles) != len(set(titles)):
+        raise ValueError("评测数据集文档 title 必须唯一")
+
+    cases: list[RagEvalCase] = []
+    for index, item in enumerate(raw_cases, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"cases[{index}] 必须是对象")
+        expected_document = _required_string(item, "expected_document", f"cases[{index}]")
+        if expected_document not in titles:
+            raise ValueError(f"cases[{index}] 引用了不存在的文档: {expected_document}")
+        raw_terms = item.get("expected_terms", [])
+        if not isinstance(raw_terms, list) or not all(
+            isinstance(term, str) and term.strip() for term in raw_terms
+        ):
+            raise ValueError(f"cases[{index}].expected_terms 必须是字符串数组")
+        cases.append(
+            RagEvalCase(
+                query=_required_string(item, "query", f"cases[{index}]"),
+                expected_document=expected_document,
+                expected_terms=tuple(term.strip() for term in raw_terms),
+            )
+        )
+
+    sample_only = payload.get("sample_only", False)
+    if not isinstance(sample_only, bool):
+        raise ValueError("评测数据集 sample_only 必须是布尔值")
+
+    return RagEvalDataset(
+        name=name,
+        documents=tuple(documents),
+        cases=tuple(cases),
+        sample_only=sample_only,
+    )
+
+
+def _required_string(payload: dict[str, Any], key: str, location: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{location}.{key} 必须是非空字符串")
+    return value.strip()
 
 
 def _chunk_summary(chunk: Any, rank: int) -> dict[str, Any]:

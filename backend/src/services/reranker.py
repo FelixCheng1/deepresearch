@@ -30,7 +30,7 @@ class CrossEncoderReranker:
         pairs = [(query, chunk.text) for chunk in chunks]
         scores = self._model.predict(pairs)
         scored = []
-        for score, chunk in zip(scores, chunks):
+        for score, chunk in zip(scores, chunks, strict=True):
             metadata = dict(chunk.metadata)
             metadata["rerank_score"] = round(float(score), 4)
             scored.append((float(score), ResearchDocumentChunk(

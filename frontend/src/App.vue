@@ -50,6 +50,16 @@
             @toggle-chunk="toggleChunk"
           />
         </template>
+        <template #history>
+          <ResearchHistory
+            :runs="researchRuns"
+            :loading="historyLoading"
+            :error="historyError"
+            :replaying-run-id="replayingRunId"
+            @refresh="refreshResearchRuns"
+            @replay="loadResearchRun"
+          />
+        </template>
       </ResearchForm>
     </div>
 
@@ -205,20 +215,25 @@ import DocumentLibrary from "./components/DocumentLibrary.vue";
 import EvidenceColumn from "./components/EvidenceColumn.vue";
 import ReportBlock from "./components/ReportBlock.vue";
 import ResearchForm from "./components/ResearchForm.vue";
+import ResearchHistory from "./components/ResearchHistory.vue";
 import TaskSection from "./components/TaskSection.vue";
 import WorkflowPanel from "./components/WorkflowPanel.vue";
 
 import {
   deleteDocument,
   getDocument,
+  getResearchRun,
   listDocuments,
+  listResearchRuns,
   retryDocument,
   runResearchStream,
   uploadDocument,
   type DocumentDetail,
   type DocumentSummary,
+  type ResearchRunSummary,
   type ResearchStreamEvent
 } from "./services/api";
+import { buildHistoryReplay, parseSources } from "./services/historyReplay";
 import type { SourceItem, TodoTaskView, ToolCallLog, WorkflowEdgeView, WorkflowNodeView } from "./types";
 
 const form = reactive({
@@ -256,6 +271,10 @@ const researchDocumentCount = ref(0);
 const selectedDocumentId = ref<string | null>(null);
 const selectedDocument = ref<DocumentDetail | null>(null);
 const expandedChunkIds = ref<Set<string>>(new Set());
+const researchRuns = ref<ResearchRunSummary[]>([]);
+const historyLoading = ref(false);
+const historyError = ref("");
+const replayingRunId = ref<string | null>(null);
 
 let currentController: AbortController | null = null;
 let documentPollTimer: number | null = null;
@@ -494,123 +513,6 @@ const pulse = (flag: typeof summaryHighlight) => {
   });
 };
 
-function parseSources(raw: string): SourceItem[] {
-  if (!raw) {
-    return [];
-  }
-
-  const items: SourceItem[] = [];
-  const lines = raw.split("\n");
-
-  let current: SourceItem | null = null;
-  const truncate = (value: string, max = 360) => {
-    const trimmed = value.trim();
-    return trimmed.length > max ? `${trimmed.slice(0, max)}…` : trimmed;
-  };
-
-  const flush = () => {
-    if (!current) {
-      return;
-    }
-    const normalized: SourceItem = {
-      title: current.title?.trim() || "",
-      url: current.url?.trim() || "",
-      snippet: current.snippet ? truncate(current.snippet) : "",
-      raw: current.raw ? truncate(current.raw, 420) : ""
-    };
-
-    if (
-      normalized.title ||
-      normalized.url ||
-      normalized.snippet ||
-      normalized.raw
-    ) {
-      if (!normalized.title && normalized.url) {
-        normalized.title = normalized.url;
-      }
-      items.push(normalized);
-    }
-    current = null;
-  };
-
-  const ensureCurrent = () => {
-    if (!current) {
-      current = { title: "", url: "", snippet: "", raw: "" };
-    }
-  };
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-
-    if (/^\*/.test(trimmed) && trimmed.includes(" : ")) {
-      flush();
-      const withoutBullet = trimmed.replace(/^\*\s*/, "");
-      const [titlePart, urlPart] = withoutBullet.split(" : ");
-      current = {
-        title: titlePart?.trim() || "",
-        url: urlPart?.trim() || "",
-        snippet: "",
-        raw: ""
-      };
-      continue;
-    }
-
-    if (/^(Source|信息来源)\s*:/.test(trimmed)) {
-      flush();
-      const [, titlePart = ""] = trimmed.split(/:\s*(.+)/);
-      current = {
-        title: titlePart.trim(),
-        url: "",
-        snippet: "",
-        raw: ""
-      };
-      continue;
-    }
-
-    if (/^URL\s*:/.test(trimmed)) {
-      ensureCurrent();
-      const [, urlPart = ""] = trimmed.split(/:\s*(.+)/);
-      current!.url = urlPart.trim();
-      continue;
-    }
-
-    if (
-      /^(Most relevant content from source|信息内容)\s*:/.test(trimmed)
-    ) {
-      ensureCurrent();
-      const [, contentPart = ""] = trimmed.split(/:\s*(.+)/);
-      current!.snippet = contentPart.trim();
-      continue;
-    }
-
-    if (
-      /^(Full source content limited to|信息内容限制为)\s*:/.test(trimmed)
-    ) {
-      ensureCurrent();
-      const [, rawPart = ""] = trimmed.split(/:\s*(.+)/);
-      current!.raw = rawPart.trim();
-      continue;
-    }
-
-    if (/^https?:\/\//.test(trimmed)) {
-      ensureCurrent();
-      if (!current!.url) {
-        current!.url = trimmed;
-        continue;
-      }
-    }
-
-    ensureCurrent();
-    current!.raw = current!.raw ? `${current!.raw}\n${trimmed}` : trimmed;
-  }
-
-  flush();
-  return items;
-}
-
 function extractOptionalString(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -809,6 +711,47 @@ function applyWorkflowGraph(payload: Record<string, unknown>) {
       to: extractOptionalString(item.to) ?? ""
     }))
     .filter((edge) => edge.from && edge.to);
+}
+
+async function refreshResearchRuns() {
+  historyLoading.value = true;
+  historyError.value = "";
+  try {
+    researchRuns.value = await listResearchRuns(12);
+  } catch (err) {
+    historyError.value = err instanceof Error ? err.message : "无法读取研究历史";
+  } finally {
+    historyLoading.value = false;
+  }
+}
+
+async function loadResearchRun(runId: string) {
+  if (replayingRunId.value) {
+    return;
+  }
+  replayingRunId.value = runId;
+  historyError.value = "";
+  try {
+    const run = await getResearchRun(runId);
+    const replay = buildHistoryReplay(run);
+    resetWorkflowState();
+    form.topic = run.topic;
+    form.searchApi = run.search_api ?? "";
+    todoTasks.value = replay.tasks;
+    reportMarkdown.value = replay.reportMarkdown || "历史运行未保存最终报告";
+    workflowNodes.value = replay.workflowNodes;
+    workflowEdges.value = replay.workflowEdges;
+    activeTaskId.value = replay.tasks[0]?.id ?? null;
+    selectedWorkflowNodeId.value = replay.workflowNodes[0]?.id ?? null;
+    researchDocumentCount.value = documents.value.length;
+    progressLogs.value = [`已恢复历史运行 ${run.id.slice(0, 8)}`];
+    error.value = "";
+    isExpanded.value = true;
+  } catch (err) {
+    historyError.value = err instanceof Error ? err.message : "无法恢复研究历史";
+  } finally {
+    replayingRunId.value = null;
+  }
 }
 
 async function refreshDocuments() {
@@ -1327,6 +1270,7 @@ const handleSubmit = async () => {
     if (currentController === controller) {
       currentController = null;
     }
+    void refreshResearchRuns();
   }
 };
 
@@ -1357,6 +1301,7 @@ const startNewResearch = () => {
 
 onMounted(() => {
   void refreshDocuments();
+  void refreshResearchRuns();
 });
 
 onBeforeUnmount(() => {

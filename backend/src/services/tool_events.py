@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from models import SummaryState, TodoItem
 
@@ -24,19 +24,19 @@ class ToolCallEvent:
     raw_parameters: str
     parsed_parameters: dict[str, Any]
     result: str
-    task_id: Optional[int]
-    note_id: Optional[str]
+    task_id: int | None
+    note_id: str | None
 
 
 class ToolCallTracker:
     """收集工具调用事件，并转换为 SSE 载荷。"""
 
-    def __init__(self, notes_workspace: Optional[str]) -> None:
+    def __init__(self, notes_workspace: str | None) -> None:
         self._notes_workspace = notes_workspace
         self._events: list[ToolCallEvent] = []
         self._cursor = 0
         self._lock = Lock()
-        self._event_sink: Optional[Callable[[dict[str, Any]], None]] = None
+        self._event_sink: Callable[[dict[str, Any]], None] | None = None
 
     def record(self, payload: dict[str, Any]) -> None:
         """记录模型工具调用情况，便于日志与前端展示。"""
@@ -51,7 +51,7 @@ class ToolCallTracker:
             parsed_parameters = {}
 
         task_id = self._infer_task_id(parsed_parameters)
-        note_id: Optional[str] = None
+        note_id: str | None = None
 
         if tool_name == "note":
             note_id = parsed_parameters.get("note_id")
@@ -88,7 +88,7 @@ class ToolCallTracker:
     # ------------------------------------------------------------------
     # 事件提取辅助方法
     # ------------------------------------------------------------------
-    def drain(self, state: SummaryState, *, step: Optional[int] = None) -> list[dict[str, Any]]:
+    def drain(self, state: SummaryState, *, step: int | None = None) -> list[dict[str, Any]]:
         """提取尚未消费的工具调用事件，并同步任务的 note_id。"""
 
         with self._lock:
@@ -137,12 +137,12 @@ class ToolCallTracker:
                 for event in self._events
             ]
 
-    def set_event_sink(self, sink: Optional[Callable[[dict[str, Any]], None]]) -> None:
+    def set_event_sink(self, sink: Callable[[dict[str, Any]], None] | None) -> None:
         """注册用于即时工具事件通知的回调。"""
 
         self._event_sink = sink
 
-    def _build_payload(self, event: ToolCallEvent, step: Optional[int]) -> dict[str, Any]:
+    def _build_payload(self, event: ToolCallEvent, step: int | None) -> dict[str, Any]:
         payload = {
             "type": "tool_call",
             "event_id": event.id,
@@ -178,7 +178,7 @@ class ToolCallTracker:
                 task.note_path = str(Path(self._notes_workspace) / f"{note_id}.md")
             break
 
-    def _infer_task_id(self, parameters: dict[str, Any]) -> Optional[int]:
+    def _infer_task_id(self, parameters: dict[str, Any]) -> int | None:
         """尝试从工具参数推断 task_id。"""
 
         if not parameters:
@@ -205,7 +205,7 @@ class ToolCallTracker:
 
         return None
 
-    def _extract_note_id(self, response: str) -> Optional[str]:
+    def _extract_note_id(self, response: str) -> str | None:
         if not response:
             return None
 

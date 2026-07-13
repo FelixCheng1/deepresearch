@@ -1,6 +1,6 @@
 import os
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -96,22 +96,22 @@ class Configuration(BaseModel):
         title="使用工具调用",
         description="是否使用工具调用而不是 JSON 模式生成结构化输出",
     )
-    llm_api_key: Optional[str] = Field(
+    llm_api_key: str | None = Field(
         default=None,
         title="大模型 API Key",
         description="使用自定义 OpenAI 兼容服务时的可选 API Key",
     )
-    llm_base_url: Optional[str] = Field(
+    llm_base_url: str | None = Field(
         default=None,
         title="大模型基础 URL",
         description="使用自定义 OpenAI 兼容服务时的可选基础地址",
     )
-    llm_model_id: Optional[str] = Field(
+    llm_model_id: str | None = Field(
         default=None,
         title="大模型 ID",
         description="使用自定义 OpenAI 兼容服务时的可选模型标识",
     )
-    database_url: Optional[str] = Field(
+    database_url: str | None = Field(
         default=None,
         title="数据库 URL",
         description="为未来 Postgres + pgvector 预留的数据库连接字符串",
@@ -186,27 +186,27 @@ class Configuration(BaseModel):
         title="PDF OCR 最大页数",
         description="最多 OCR 的 PDF 页数",
     )
-    tesseract_cmd: Optional[str] = Field(
+    tesseract_cmd: str | None = Field(
         default=None,
         title="Tesseract 命令路径",
         description="Windows 可手动指定 tesseract.exe 路径",
     )
-    poppler_path: Optional[str] = Field(
+    poppler_path: str | None = Field(
         default=None,
         title="Poppler 路径",
         description="Windows 可手动指定 poppler bin 路径",
     )
-    embedding_base_url: Optional[str] = Field(
+    embedding_base_url: str | None = Field(
         default=None,
         title="Embedding 基础 URL",
         description="可选的 OpenAI-compatible embeddings API 地址；未设置时回退到 LLM_BASE_URL",
     )
-    embedding_api_key: Optional[str] = Field(
+    embedding_api_key: str | None = Field(
         default=None,
         title="Embedding API Key",
         description="可选的 embeddings API Key；未设置时回退到 LLM_API_KEY",
     )
-    embedding_model: Optional[str] = Field(
+    embedding_model: str | None = Field(
         default="text-embedding-3-small",
         title="嵌入模型",
         description="为未来向量索引预留的嵌入模型标识",
@@ -223,7 +223,7 @@ class Configuration(BaseModel):
     )
 
     @classmethod
-    def from_env(cls, overrides: Optional[dict[str, Any]] = None) -> "Configuration":
+    def from_env(cls, overrides: dict[str, Any] | None = None) -> "Configuration":
         """根据环境变量和覆盖项创建配置对象。"""
 
         raw_values: dict[str, Any] = {}
@@ -304,7 +304,7 @@ class Configuration(BaseModel):
             base = f"{base}/v1"
         return base
 
-    def resolved_model(self) -> Optional[str]:
+    def resolved_model(self) -> str | None:
         """尽力解析当前应使用的模型标识。"""
 
         return self.llm_model_id or self.local_llm

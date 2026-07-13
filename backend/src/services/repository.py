@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-import re
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -21,9 +20,9 @@ from models import (
     ResearchRun,
     ResearchSource,
     ResearchTask,
+    ResearchToolCall,
 )
 from services.chunker import chunk_text
-from services.embeddings import EmbeddingProvider, attach_embeddings, cosine_similarity
 from services.database import (
     DocumentChunkRow,
     DocumentJobRow,
@@ -32,9 +31,12 @@ from services.database import (
     ResearchRunRow,
     ResearchSourceRow,
     ResearchTaskRow,
+    ResearchToolCallRow,
     create_database_engine,
     create_session_factory,
 )
+from services.embeddings import EmbeddingProvider, attach_embeddings
+from services.retrieval_scoring import rank_chunks
 
 
 class ResearchRepository(Protocol):
@@ -51,6 +53,9 @@ class ResearchRepository(Protocol):
 
     def save_report(self, report: ResearchReport) -> None:
         """Save report snapshot."""
+
+    def save_tool_call(self, tool_call: ResearchToolCall) -> None:
+        """Save one structured tool call for history replay."""
 
     def list_runs(self, limit: int = 20) -> list[dict[str, Any]]:
         """List research runs by creation time descending."""
@@ -137,6 +142,7 @@ class InMemoryResearchRepository:
     tasks: dict[tuple[str, int], ResearchTask] = field(default_factory=dict)
     sources: list[ResearchSource] = field(default_factory=list)
     reports: dict[str, ResearchReport] = field(default_factory=dict)
+    tool_calls: dict[tuple[str, int], ResearchToolCall] = field(default_factory=dict)
     documents: dict[str, ResearchDocument] = field(default_factory=dict)
     document_jobs: dict[str, dict[str, Any]] = field(default_factory=dict)
     embedding_service: EmbeddingProvider | None = None
@@ -152,6 +158,9 @@ class InMemoryResearchRepository:
 
     def save_report(self, report: ResearchReport) -> None:
         self.reports[report.run_id] = report
+
+    def save_tool_call(self, tool_call: ResearchToolCall) -> None:
+        self.tool_calls[(tool_call.run_id, tool_call.event_id)] = tool_call
 
     def list_runs(self, limit: int = 20) -> list[dict[str, Any]]:
         runs = sorted(self.runs.values(), key=lambda item: item.created_at, reverse=True)
@@ -169,11 +178,19 @@ class InMemoryResearchRepository:
         ]
         sources = [source for source in self.sources if source.run_id == run_id]
         report = self.reports.get(run_id)
+        tool_calls = [
+            tool_call
+            for (call_run_id, _), tool_call in sorted(
+                self.tool_calls.items(), key=lambda item: item[0][1]
+            )
+            if call_run_id == run_id
+        ]
         return {
             **self._run_summary(run),
             "tasks": [_task_to_dict(task) for task in tasks],
             "sources": [_source_to_dict(source) for source in sources],
             "report": _report_to_dict(report) if report else None,
+            "tool_calls": [_tool_call_to_dict(tool_call) for tool_call in tool_calls],
         }
 
     def save_document(
@@ -372,7 +389,7 @@ class InMemoryResearchRepository:
         query_embedding: list[float] | None = None,
     ) -> list[ResearchDocumentChunk]:
         chunks = [chunk for document in self.documents.values() for chunk in document.chunks]
-        return _rank_chunks(query, chunks, limit=limit, min_score=min_score, query_embedding=query_embedding)
+        return rank_chunks(query, chunks, limit=limit, min_score=min_score, query_embedding=query_embedding)
 
     def _run_summary(self, run: ResearchRun) -> dict[str, Any]:
         return {
@@ -438,6 +455,8 @@ class PostgresResearchRepository:
             existing.intent = task.intent
             existing.query = task.query
             existing.status = task.status
+            existing.summary = task.summary
+            existing.sources_summary = task.sources_summary
             existing.note_id = task.note_id
             existing.note_path = task.note_path
             session.commit()
@@ -466,6 +485,30 @@ class PostgresResearchRepository:
             row.note_path = report.note_path
             session.commit()
 
+    def save_tool_call(self, tool_call: ResearchToolCall) -> None:
+        with self._session() as session:
+            row = session.scalar(
+                select(ResearchToolCallRow).where(
+                    ResearchToolCallRow.run_id == tool_call.run_id,
+                    ResearchToolCallRow.event_id == tool_call.event_id,
+                )
+            )
+            if row is None:
+                row = ResearchToolCallRow(
+                    run_id=tool_call.run_id,
+                    event_id=tool_call.event_id,
+                )
+                session.add(row)
+            row.agent = tool_call.agent
+            row.tool = tool_call.tool
+            row.parameters = tool_call.parameters
+            row.result = tool_call.result
+            row.task_id = tool_call.task_id
+            row.note_id = tool_call.note_id
+            row.step = tool_call.step
+            row.created_at = tool_call.created_at
+            session.commit()
+
     def list_runs(self, limit: int = 20) -> list[dict[str, Any]]:
         safe_limit = max(1, min(limit, 100))
         with self._session() as session:
@@ -485,6 +528,7 @@ class PostgresResearchRepository:
                     joinedload(ResearchRunRow.tasks),
                     joinedload(ResearchRunRow.sources),
                     joinedload(ResearchRunRow.report),
+                    joinedload(ResearchRunRow.tool_calls),
                 )
             )
             row = session.execute(stmt).unique().scalar_one_or_none()
@@ -496,6 +540,7 @@ class PostgresResearchRepository:
                 "tasks": [_task_row_to_dict(task) for task in row.tasks],
                 "sources": [_source_row_to_dict(source) for source in row.sources],
                 "report": _report_row_to_dict(row.report) if row.report else None,
+                "tool_calls": [_tool_call_row_to_dict(call) for call in row.tool_calls],
             }
 
     def save_document(
@@ -814,7 +859,7 @@ class PostgresResearchRepository:
                 .options(joinedload(DocumentChunkRow.document))
             ).scalars().all()
             chunks = [_chunk_row_to_model(row) for row in rows]
-        return _rank_chunks(query, chunks, limit=limit, min_score=min_score, query_embedding=query_embedding)
+        return rank_chunks(query, chunks, limit=limit, min_score=min_score, query_embedding=query_embedding)
 
     def backfill_document_embeddings(self, limit: int = 100) -> int:
         if self.embedding_service is None:
@@ -834,7 +879,7 @@ class PostgresResearchRepository:
                 return 0
             vectors = self.embedding_service.embed_texts([row.text for row in rows])
             embedded_at = datetime.now(timezone.utc)
-            for row, vector in zip(rows, vectors):
+            for row, vector in zip(rows, vectors, strict=True):
                 metadata = dict(row.chunk_metadata or {})
                 metadata.update(
                     {
@@ -928,169 +973,6 @@ def _summarize_text(text: str, limit: int = 240) -> str:
     return f"{compact[:limit].rstrip()}..."
 
 
-def _rank_chunks(
-    query: str,
-    chunks: list[ResearchDocumentChunk],
-    *,
-    limit: int,
-    min_score: float = 0.0,
-    query_embedding: list[float] | None = None,
-) -> list[ResearchDocumentChunk]:
-    query_profile = _build_query_profile(query)
-    safe_limit = max(1, min(limit, 20))
-    if not chunks:
-        return []
-    if not query_profile["terms"] and not query_profile["phrases"] and not query_embedding:
-        return chunks[:safe_limit]
-
-    avg_len = max(1.0, sum(_chunk_length(chunk) for chunk in chunks) / max(1, len(chunks)))
-    bm25_scores: dict[str, tuple[float, list[str]]] = {}
-    for chunk in chunks:
-        bm25_scores[chunk.id] = _score_chunk(chunk, query_profile, avg_len)
-    max_bm25 = max((score for score, _ in bm25_scores.values()), default=0.0)
-
-    scored: list[tuple[float, ResearchDocumentChunk]] = []
-    for chunk in chunks:
-        bm25_score, matched_terms = bm25_scores[chunk.id]
-        vector_score = cosine_similarity(query_embedding, chunk.embedding) if query_embedding else 0.0
-        if vector_score <= 0 and bm25_score < min_score:
-            continue
-        if vector_score <= 0 and bm25_score <= 0:
-            continue
-
-        bm25_norm = bm25_score / max_bm25 if max_bm25 > 0 else 0.0
-        hybrid_score = (0.55 * vector_score + 0.45 * bm25_norm) if query_embedding else bm25_score
-        display_score = hybrid_score * 100 if query_embedding else hybrid_score
-        metadata = dict(chunk.metadata)
-        metadata.update(
-            {
-                "score": round(display_score, 4),
-                "hybrid_score": round(display_score, 4),
-                "bm25_score": round(bm25_score, 4),
-                "vector_score": round(vector_score * 100, 4),
-                "matched_terms": matched_terms,
-                "snippet": _best_snippet(chunk.text, query_profile),
-            }
-        )
-        scored.append(
-            (
-                hybrid_score,
-                ResearchDocumentChunk(
-                    id=chunk.id,
-                    document_id=chunk.document_id,
-                    document_title=chunk.document_title,
-                    chunk_index=chunk.chunk_index,
-                    text=chunk.text,
-                    metadata=metadata,
-                    embedding=chunk.embedding,
-                    embedding_model=chunk.embedding_model,
-                    embedded_at=chunk.embedded_at,
-                ),
-            )
-        )
-
-    scored.sort(key=lambda item: (-item[0], item[1].document_title, item[1].chunk_index))
-    return [chunk for _, chunk in scored[:safe_limit]]
-
-def _build_query_profile(query: str) -> dict[str, list[str]]:
-    normalized = _normalize_for_search(query)
-    words = re.findall(r"[a-z0-9]+", normalized)
-    cjk_chars = re.findall(r"[\u4e00-\u9fff]", normalized)
-    cjk_bigrams = ["".join(cjk_chars[index : index + 2]) for index in range(max(0, len(cjk_chars) - 1))]
-    terms = _dedupe([term for term in words + cjk_bigrams if len(term) > 1])
-    phrases = _dedupe([part for part in re.split(r"\s+", normalized) if len(part) >= 4])
-    if len(cjk_chars) >= 3:
-        phrases.append("".join(cjk_chars))
-    return {"terms": terms, "phrases": _dedupe(phrases)}
-
-
-def _score_chunk(
-    chunk: ResearchDocumentChunk,
-    query_profile: dict[str, list[str]],
-    avg_len: float,
-) -> tuple[float, list[str]]:
-    title = _normalize_for_search(chunk.document_title)
-    body = _normalize_for_search(chunk.text)
-    title_tokens = _tokenize_text(title)
-    body_tokens = _tokenize_text(body)
-    body_len = max(1, len(body_tokens))
-    k1 = 1.4
-    b = 0.72
-    score = 0.0
-    matched: list[str] = []
-
-    for term in query_profile["terms"]:
-        tf = body_tokens.count(term)
-        title_tf = title_tokens.count(term)
-        substring_hit = 1 if term in body and tf == 0 else 0
-        frequency = tf + substring_hit + title_tf * 2.4
-        if frequency <= 0:
-            continue
-        bm25 = (frequency * (k1 + 1)) / (frequency + k1 * (1 - b + b * body_len / avg_len))
-        score += bm25
-        if title_tf:
-            score += 1.2
-        matched.append(term)
-
-    for phrase in query_profile["phrases"]:
-        if phrase and phrase in f"{title}\n{body}":
-            score += 2.5 if phrase in title else 1.6
-            matched.append(phrase)
-
-    if query_profile["terms"]:
-        coverage = len(set(matched) & set(query_profile["terms"])) / len(query_profile["terms"])
-        score += coverage * 2.0
-
-    if body_len > avg_len * 1.8:
-        score *= 0.92
-    return score, _dedupe(matched)[:8]
-
-
-def _tokenize_text(text: str) -> list[str]:
-    words = re.findall(r"[a-z0-9]+", text)
-    cjk_chars = re.findall(r"[\u4e00-\u9fff]", text)
-    cjk_bigrams = ["".join(cjk_chars[index : index + 2]) for index in range(max(0, len(cjk_chars) - 1))]
-    return words + cjk_bigrams
-
-
-def _normalize_for_search(value: str) -> str:
-    return re.sub(r"\s+", " ", value.lower()).strip()
-
-
-def _chunk_length(chunk: ResearchDocumentChunk) -> int:
-    return max(1, len(_tokenize_text(_normalize_for_search(chunk.text))))
-
-
-def _best_snippet(text: str, query_profile: dict[str, list[str]], *, max_chars: int = 220) -> str:
-    compact = " ".join(text.split())
-    if len(compact) <= max_chars:
-        return compact
-    haystack = _normalize_for_search(compact)
-    positions = [haystack.find(term) for term in query_profile["terms"] + query_profile["phrases"] if term and haystack.find(term) >= 0]
-    start = max(0, min(positions) - 60) if positions else 0
-    snippet = compact[start : start + max_chars].strip()
-    if start > 0:
-        snippet = f"...{snippet}"
-    if start + max_chars < len(compact):
-        snippet = f"{snippet}..."
-    return snippet
-
-
-def _dedupe(values: list[str]) -> list[str]:
-    seen: set[str] = set()
-    deduped: list[str] = []
-    for value in values:
-        if not value or value in seen:
-            continue
-        seen.add(value)
-        deduped.append(value)
-    return deduped
-
-
-def _tokenize(query: str) -> list[str]:
-    return _build_query_profile(query)["terms"]
-
-
 def _task_to_dict(task: ResearchTask) -> dict[str, Any]:
     return {
         "task_id": task.task_id,
@@ -1098,6 +980,8 @@ def _task_to_dict(task: ResearchTask) -> dict[str, Any]:
         "intent": task.intent,
         "query": task.query,
         "status": task.status,
+        "summary": task.summary,
+        "sources_summary": task.sources_summary,
         "note_id": task.note_id,
         "note_path": task.note_path,
     }
@@ -1120,6 +1004,20 @@ def _report_to_dict(report: ResearchReport) -> dict[str, Any]:
     }
 
 
+def _tool_call_to_dict(tool_call: ResearchToolCall) -> dict[str, Any]:
+    return {
+        "event_id": tool_call.event_id,
+        "agent": tool_call.agent,
+        "tool": tool_call.tool,
+        "parameters": tool_call.parameters,
+        "result": tool_call.result,
+        "task_id": tool_call.task_id,
+        "note_id": tool_call.note_id,
+        "step": tool_call.step,
+        "created_at": tool_call.created_at.isoformat(),
+    }
+
+
 def _run_row_to_summary(row: ResearchRunRow) -> dict[str, Any]:
     return {
         "id": row.id,
@@ -1136,6 +1034,8 @@ def _task_row_to_dict(row: ResearchTaskRow) -> dict[str, Any]:
         "intent": row.intent,
         "query": row.query,
         "status": row.status,
+        "summary": row.summary,
+        "sources_summary": row.sources_summary,
         "note_id": row.note_id,
         "note_path": row.note_path,
     }
@@ -1156,6 +1056,20 @@ def _report_row_to_dict(row: ResearchReportRow) -> dict[str, Any]:
         "markdown": row.markdown,
         "note_id": row.note_id,
         "note_path": row.note_path,
+    }
+
+
+def _tool_call_row_to_dict(row: ResearchToolCallRow) -> dict[str, Any]:
+    return {
+        "event_id": row.event_id,
+        "agent": row.agent,
+        "tool": row.tool,
+        "parameters": row.parameters or {},
+        "result": row.result,
+        "task_id": row.task_id,
+        "note_id": row.note_id,
+        "step": row.step,
+        "created_at": row.created_at.isoformat(),
     }
 
 

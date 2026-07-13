@@ -3,21 +3,22 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from helpers import make_notes_dir
+from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
+from test_agent_api import FakeChatModel, empty_search, fake_search
+
 import agent as agent_module
 import main as main_module
 from config import Configuration
 from models import ResearchDocumentChunk
 from services.chunker import chunk_text
-from sqlalchemy import select
-from sqlalchemy.orm import sessionmaker
-
 from services.database import Base, DocumentChunkRow
 from services.document_parser import DocumentParseError, parse_document
 from services.document_worker import process_one_document_job
-from services.repository import InMemoryResearchRepository, PostgresResearchRepository, _tokenize
+from services.repository import InMemoryResearchRepository, PostgresResearchRepository
+from services.retrieval_scoring import tokenize
 from services.retriever import RepositoryRetriever
-from test_agent_api import FakeChatModel, empty_search, fake_search
-from helpers import make_notes_dir
 
 
 def test_chunk_text_splits_paragraphs_with_overlap():
@@ -214,7 +215,7 @@ def test_pdf_ocr_failure_is_clear(monkeypatch):
 
 
 def test_rag_tokenizer_supports_english_numbers_and_cjk_bigrams():
-    tokens = _tokenize("LangGraph 2026 文档检索质量")
+    tokens = tokenize("LangGraph 2026 文档检索质量")
 
     assert "langgraph" in tokens
     assert "2026" in tokens

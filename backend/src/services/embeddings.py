@@ -77,7 +77,7 @@ def attach_embeddings(
 
     embedded_at = datetime.now(timezone.utc)
     updated: list[ResearchDocumentChunk] = []
-    for chunk, vector in zip(chunks, vectors):
+    for chunk, vector in zip(chunks, vectors, strict=True):
         metadata = dict(chunk.metadata)
         metadata.update(
             {
@@ -105,7 +105,7 @@ def attach_embeddings(
 def cosine_similarity(left: list[float] | None, right: list[float] | None) -> float:
     if not left or not right or len(left) != len(right):
         return 0.0
-    dot = sum(a * b for a, b in zip(left, right))
+    dot = sum(a * b for a, b in zip(left, right, strict=True))
     left_norm = sum(a * a for a in left) ** 0.5
     right_norm = sum(b * b for b in right) ** 0.5
     if left_norm == 0 or right_norm == 0:

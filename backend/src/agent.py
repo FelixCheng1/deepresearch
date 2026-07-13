@@ -18,6 +18,7 @@ from models import (
     ResearchRun,
     ResearchSource,
     ResearchTask,
+    ResearchToolCall,
     SummaryState,
     SummaryStateOutput,
     TodoItem,
@@ -26,8 +27,8 @@ from services.graph import build_research_graph, build_task_graph, send_task
 from services.llm import create_chat_model, message_content
 from services.note_store import NoteStore
 from services.planner import PlanningService
-from services.repository import ResearchRepository, create_research_repository
 from services.reporter import ReportingService
+from services.repository import ResearchRepository, create_research_repository
 from services.retriever import Retriever, create_retriever
 from services.search import dispatch_search, prepare_research_context
 from services.summarizer import SummarizationService
@@ -177,7 +178,7 @@ class DeepResearchAgent:
             )
         )
 
-        for index, task in enumerate(state.todo_items, start=1):
+        for task in state.todo_items:
             task.stream_token = f"task_{task.id}"
             self._ensure_task_note(task)
             self.repository.save_task(self._task_snapshot(task))
@@ -612,7 +613,7 @@ class DeepResearchAgent:
             first = self._workflow_node_id("prepare_task", task)
             nodes_for_edges = [self._workflow_node_id(node, task) for node, _ in task_nodes]
             edges.append({"from": "global:dispatch_tasks", "to": first})
-            for source, target in zip(nodes_for_edges, nodes_for_edges[1:]):
+            for source, target in zip(nodes_for_edges, nodes_for_edges[1:], strict=False):
                 edges.append({"from": source, "to": target})
             edges.append({"from": nodes_for_edges[-1], "to": "global:join_tasks"})
 
@@ -653,7 +654,22 @@ class DeepResearchAgent:
     ) -> list[dict[str, Any]]:
         """代理到共享的工具调用追踪器。"""
 
-        return self._tool_tracker.drain(state, step=step)
+        events = self._tool_tracker.drain(state, step=step)
+        for event in events:
+            self.repository.save_tool_call(
+                ResearchToolCall(
+                    run_id=self.run_id,
+                    event_id=int(event["event_id"]),
+                    agent=str(event["agent"]),
+                    tool=str(event["tool"]),
+                    parameters=dict(event.get("parameters") or {}),
+                    result=str(event.get("result") or ""),
+                    task_id=event.get("task_id"),
+                    note_id=event.get("note_id"),
+                    step=event.get("step"),
+                )
+            )
+        return events
 
     @property
     def _tool_call_events(self) -> list[dict[str, Any]]:
@@ -743,6 +759,8 @@ class DeepResearchAgent:
             intent=task.intent,
             query=task.query,
             status=task.status,
+            summary=task.summary,
+            sources_summary=task.sources_summary,
             note_id=task.note_id,
             note_path=task.note_path,
         )

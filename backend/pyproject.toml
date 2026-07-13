@@ -56,24 +56,18 @@ lint.select = [
     "E",    # pycodestyle
     "F",    # pyflakes
     "I",    # isort
-    "D",    # pydocstyle
-    "D401", # First line should be in imperative mood
-    "T201",
-    "UP",
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
 ]
 lint.ignore = [
     "UP006",
     "UP007",
     "UP035",
-    "D417",
     "E501",
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["D", "UP"]
-
-[tool.ruff.lint.pydocstyle]
-convention = "google"
+"tests/*" = ["E402", "UP"]
 
 [dependency-groups]
 dev = [

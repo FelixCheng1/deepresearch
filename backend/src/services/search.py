@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Optional, Tuple
+from typing import Any, Tuple
 
 import requests
 from ddgs import DDGS
@@ -26,7 +26,7 @@ def dispatch_search(
     query: str,
     config: Configuration,
     loop_count: int,
-) -> Tuple[dict[str, Any] | None, list[str], Optional[str], str]:
+) -> Tuple[dict[str, Any] | None, list[str], str | None, str]:
     """执行配置的搜索后端，并标准化响应载荷。"""
 
     search_api = get_config_value(config.search_api)
@@ -198,7 +198,7 @@ def _perplexity_search(query: str, config: Configuration) -> dict[str, Any]:
 
 def prepare_research_context(
     search_result: dict[str, Any] | None,
-    answer_text: Optional[str],
+    answer_text: str | None,
     config: Configuration,
 ) -> tuple[str, str]:
     """为下游模型构建结构化上下文和来源摘要。"""

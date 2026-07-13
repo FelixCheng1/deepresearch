@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import threading
-import time
 from collections.abc import Callable
 
 from loguru import logger
@@ -38,7 +37,7 @@ def process_one_document_job(repository: ResearchRepository, config: Configurati
         message = str(exc)
         repository.fail_document_processing(job["document_id"], message)
         repository.fail_document_job(job["id"], message)
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         logger.exception("Document job failed")
         message = "document processing failed"
         repository.fail_document_processing(job["document_id"], message)
