@@ -4,17 +4,38 @@ const baseURL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
 
-async function authenticatedFetch(
+export const AUTH_EXPIRED_EVENT = "deepresearch:auth-expired";
+
+export class AuthenticationExpiredError extends Error {
+  constructor() {
+    super("登录已失效，请重新登录");
+    this.name = "AuthenticationExpiredError";
+  }
+}
+
+export function notifyAuthenticationExpired(): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+  }
+}
+
+export async function authenticatedFetch(
   input: RequestInfo | URL,
   init: RequestInit = {}
 ): Promise<Response> {
   const token = await getAccessToken();
   if (!token) {
-    throw new Error("登录已失效，请重新登录");
+    notifyAuthenticationExpired();
+    throw new AuthenticationExpiredError();
   }
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${token}`);
-  return fetch(input, { ...init, headers });
+  const response = await fetch(input, { ...init, headers });
+  if (response.status === 401) {
+    notifyAuthenticationExpired();
+    throw new AuthenticationExpiredError();
+  }
+  return response;
 }
 export interface ResearchRequest {
   topic: string;

@@ -525,12 +525,12 @@ class PostgresResearchRepository:
     def list_runs(self, limit: int = 20, owner_id: str | None = None) -> list[dict[str, Any]]:
         safe_limit = max(1, min(limit, 100))
         with self._session() as session:
+            statement = select(ResearchRunRow)
+            if owner_id is not None:
+                statement = statement.where(ResearchRunRow.owner_id == owner_id)
             rows = session.scalars(
-                select(ResearchRunRow)
-                .order_by(ResearchRunRow.created_at.desc())
-                .limit(safe_limit)
+                statement.order_by(ResearchRunRow.created_at.desc()).limit(safe_limit)
             ).all()
-            rows = [row for row in rows if owner_id is None or row.owner_id == owner_id]
             return [_run_row_to_summary(row) for row in rows]
 
     def get_run(self, run_id: str, owner_id: str | None = None) -> dict[str, Any] | None:
@@ -839,13 +839,12 @@ class PostgresResearchRepository:
     def list_documents(self, limit: int = 50, owner_id: str | None = None) -> list[dict[str, Any]]:
         safe_limit = max(1, min(limit, 100))
         with self._session() as session:
+            statement = select(DocumentRow).options(joinedload(DocumentRow.chunks))
+            if owner_id is not None:
+                statement = statement.where(DocumentRow.owner_id == owner_id)
             rows = session.scalars(
-                select(DocumentRow)
-                .order_by(DocumentRow.created_at.desc())
-                .limit(safe_limit)
-                .options(joinedload(DocumentRow.chunks))
+                statement.order_by(DocumentRow.created_at.desc()).limit(safe_limit)
             ).unique().all()
-            rows = [row for row in rows if owner_id is None or row.owner_id == owner_id]
             return [_document_row_to_summary(row) for row in rows]
 
     def get_document(self, document_id: str, owner_id: str | None = None) -> dict[str, Any] | None:
@@ -877,12 +876,14 @@ class PostgresResearchRepository:
         owner_id: str | None = None,
     ) -> list[ResearchDocumentChunk]:
         with self._session() as session:
-            rows = session.execute(
+            statement = (
                 select(DocumentChunkRow)
                 .join(DocumentChunkRow.document)
                 .options(joinedload(DocumentChunkRow.document))
-            ).scalars().all()
-            rows = [row for row in rows if owner_id is None or row.document.owner_id == owner_id]
+            )
+            if owner_id is not None:
+                statement = statement.where(DocumentRow.owner_id == owner_id)
+            rows = session.execute(statement).scalars().all()
             chunks = [_chunk_row_to_model(row) for row in rows]
         return rank_chunks(query, chunks, limit=limit, min_score=min_score, query_embedding=query_embedding)
 

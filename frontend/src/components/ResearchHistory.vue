@@ -72,10 +72,10 @@ function formatRunTime(value: string): string {
 .history-card {
   margin-top: 18px;
   padding: 18px;
-  border: 1px solid color-mix(in srgb, var(--border, #dbe3ee) 82%, #4f46e5 18%);
+  border: 1px solid color-mix(in srgb, var(--border, #dbe3ee) 82%, var(--primary, #0f766e) 18%);
   border-radius: 18px;
   background:
-    linear-gradient(135deg, rgba(79, 70, 229, 0.055), transparent 42%),
+    linear-gradient(135deg, rgba(15, 118, 110, 0.06), transparent 42%),
     var(--surface, #fff);
 }
 
@@ -89,7 +89,7 @@ function formatRunTime(value: string): string {
 
 .history-eyebrow {
   margin: 0 0 3px;
-  color: #6366f1;
+  color: var(--primary, #0f766e);
   font: 700 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
   letter-spacing: 0.16em;
 }
@@ -103,7 +103,7 @@ function formatRunTime(value: string): string {
 .history-refresh {
   border: 0;
   padding: 4px 0;
-  color: #4f46e5;
+  color: var(--primary, #0f766e);
   background: transparent;
   font: inherit;
   font-size: 12px;
@@ -134,7 +134,7 @@ function formatRunTime(value: string): string {
   position: absolute;
   inset: 0 auto 0 4px;
   width: 1px;
-  background: #d9ddf8;
+  background: var(--accent-pale, #dff1ec);
 }
 
 .history-rail::before {
@@ -146,8 +146,8 @@ function formatRunTime(value: string): string {
   height: 7px;
   border: 2px solid #fff;
   border-radius: 50%;
-  background: #6366f1;
-  box-shadow: 0 0 0 1px #a5b4fc;
+  background: var(--primary, #0f766e);
+  box-shadow: 0 0 0 1px #82c9bf;
 }
 
 .history-run {
@@ -168,7 +168,7 @@ function formatRunTime(value: string): string {
 .history-run:hover:not(:disabled),
 .history-run:focus-visible {
   outline: none;
-  background: rgba(99, 102, 241, 0.075);
+  background: rgba(15, 118, 110, 0.08);
   transform: translateX(2px);
 }
 
@@ -194,7 +194,7 @@ function formatRunTime(value: string): string {
 }
 
 .history-meta code {
-  color: #6366f1;
+  color: var(--primary, #0f766e);
   font-size: 10px;
 }
 
@@ -202,7 +202,7 @@ function formatRunTime(value: string): string {
   position: absolute;
   top: 50%;
   right: 10px;
-  color: #4f46e5;
+  color: var(--primary, #0f766e);
   font-size: 11px;
   font-weight: 650;
   transform: translateY(-50%);
