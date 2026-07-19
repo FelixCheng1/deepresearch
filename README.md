@@ -137,7 +137,7 @@ Cross-Encoder rerank 需要额外安装 `sentence-transformers`，首次启用�
 
 ## 启动前端
 
-前端默认请求 `http://localhost:8000`。如果你改了后端端口，再创建 `frontend/.env.local`：
+前端默认请求 `http://localhost:8000`。若后端端口发生变化，可创建 `frontend/.env.local`：
 
 ```text
 VITE_API_BASE_URL=http://127.0.0.1:8000
@@ -183,6 +183,7 @@ cd backend
 uv run pytest
 uv run alembic heads
 uv run python src/rag_eval_cli.py
+uv run python src/rag_benchmark_cli.py --chunk-counts 100,1000,5000 --queries 100
 uv run python src/rag_eval_cli.py --json
 uv run python src/rag_eval_cli.py --dataset eval/rag-dataset.json --fail-below-recall 0.8 --fail-below-mrr 0.6
 ```
@@ -193,11 +194,15 @@ uv run python src/rag_eval_cli.py --dataset eval/rag-dataset.json --fail-below-r
 - `MRR`：期望文档排名的倒数均值，越高表示正确文档越靠前。
 - `expected_terms_coverage`：期望证据词是否出现在目标文档召回片段中。
 
+
+合成规模基准只用于比较同一台机器上的代码变化，不代表生产 QPS 或 SLA。框架、检索和切块参数的选择依据见 [工程取舍](docs/engineering-decisions.md)。
+
 ```powershell
 cd frontend
 .\node_modules\.bin\vue-tsc.cmd --noEmit
 npm run build
 ```
+
 ## 最终验收清单
 
 - 上传 `.txt` / `.md` / `.pdf` / `.docx` 后，文档状态能从“解析中”变为“可检索”。
@@ -210,7 +215,7 @@ npm run build
 
 ## 数据库说明
 
-如果你之前主要使用 MySQL，可以先看 [docs/database.md](docs/database.md)。里面按本项目实际表结构解释了 PostgreSQL、SQLAlchemy、Alembic 和 pgvector 的作用。
+熟悉 MySQL 的读者可先查看 [docs/database.md](docs/database.md)。该文档结合本项目的实际表结构，说明 PostgreSQL、SQLAlchemy、Alembic 和 pgvector 的作用。
 
 ## 开发注意事项
 

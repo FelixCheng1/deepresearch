@@ -19,7 +19,9 @@ from pydantic import BaseModel, Field
 
 from agent import DeepResearchAgent
 from config import Configuration, SearchAPI
+from services.auth import require_user
 from services.document_worker import start_document_worker
+from services.rate_limit import DemoUsageLimiter
 from services.repository import ResearchRepository, create_research_repository
 
 load_dotenv()
@@ -45,7 +47,7 @@ logger.add(
 class ResearchRequest(BaseModel):
     """触发研究任务的请求体。"""
 
-    topic: str = Field(..., description="用户提供的研究主题")
+    topic: str = Field(..., min_length=3, max_length=500, description="用户提供的研究主题")
     search_api: SearchAPI | None = Field(
         default=None,
         description="覆盖环境变量配置的默认搜索后端",
@@ -76,13 +78,19 @@ def _mask_secret(value: str | None, visible: int = 4) -> str:
 
 
 
-async def _read_uploaded_file(request: Request) -> tuple[str, str, bytes]:
+async def _read_uploaded_file(request: Request, max_bytes: int) -> tuple[str, str, bytes]:
     """使用标准库解析单文件 multipart 上传，避免普通测试依赖 python-multipart。"""
 
     content_type = request.headers.get("content-type", "")
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdigit() and int(content_length) > max_bytes + 64 * 1024:
+        raise HTTPException(status_code=413, detail="上传文件过大")
+
     body = await request.body()
     if not content_type.startswith("multipart/form-data"):
         raise HTTPException(status_code=400, detail="请使用 multipart/form-data 上传文档")
+    if len(body) > max_bytes + 64 * 1024:
+        raise HTTPException(status_code=413, detail="上传文件过大")
 
     raw_message = (
         f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode()
@@ -98,6 +106,8 @@ async def _read_uploaded_file(request: Request) -> tuple[str, str, bytes]:
         payload = part.get_payload(decode=True) or b""
         return filename, part.get_content_type(), payload
 
+        if len(payload) > max_bytes:
+            raise HTTPException(status_code=413, detail="上传文件过大")
     raise HTTPException(status_code=400, detail="未找到上传文件")
 
 def _build_config(payload: ResearchRequest) -> Configuration:
@@ -113,6 +123,7 @@ def create_app() -> FastAPI:
     app_config = Configuration.from_env()
     memory_repository: ResearchRepository = create_research_repository(app_config)
 
+    usage_limiter = DemoUsageLimiter()
     def get_repository(config: Configuration) -> ResearchRepository:
         if config.database_url:
             return create_research_repository(config)
@@ -160,8 +171,8 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=app_config.cors_origin_list(),
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "Accept"],
     )
 
     @app.get("/healthz")
@@ -169,20 +180,22 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/research/runs")
-    def list_research_runs(limit: int = 20) -> Dict[str, Any]:
+    def list_research_runs(request: Request, limit: int = 20) -> Dict[str, Any]:
         """列出最近的研究历史。"""
 
         config = Configuration.from_env()
         repository = get_repository(config)
-        return {"runs": repository.list_runs(limit=limit)}
+        user = require_user(request, config)
+        return {"runs": repository.list_runs(limit=limit, owner_id=user.id)}
 
     @app.get("/research/runs/{run_id}")
-    def get_research_run(run_id: str) -> Dict[str, Any]:
+    def get_research_run(run_id: str, request: Request) -> Dict[str, Any]:
         """读取一次研究运行的完整快照。"""
 
         config = Configuration.from_env()
         repository = get_repository(config)
-        run = repository.get_run(run_id)
+        user = require_user(request, config)
+        run = repository.get_run(run_id, owner_id=user.id)
         if run is None:
             raise HTTPException(status_code=404, detail="未找到研究历史")
         return run
@@ -191,20 +204,34 @@ def create_app() -> FastAPI:
     async def upload_document(request: Request) -> Dict[str, Any]:
         """上传文档并后台解析、切块入库。"""
 
-        filename, content_type, raw_bytes = await _read_uploaded_file(request)
+        config = Configuration.from_env()
+        user = require_user(request, config)
+        usage_limiter.consume_upload(user.id, daily_limit=config.upload_daily_limit)
+        filename, content_type, raw_bytes = await _read_uploaded_file(request, config.upload_max_bytes)
         suffix = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
         if suffix not in {"txt", "md", "pdf", "docx"}:
             raise HTTPException(status_code=400, detail="仅支持 .txt、.md、.pdf 和 .docx 文档")
+        allowed_content_types = {
+            "txt": {"text/plain", "application/octet-stream"},
+            "md": {"text/plain", "text/markdown", "application/octet-stream"},
+            "pdf": {"application/pdf", "application/octet-stream"},
+            "docx": {
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/octet-stream",
+            },
+        }
+        if content_type not in allowed_content_types[suffix]:
+            raise HTTPException(status_code=400, detail="文件类型与扩展名不匹配")
 
         if not raw_bytes:
             raise HTTPException(status_code=400, detail="上传文件为空")
 
-        config = Configuration.from_env()
         repository = get_repository(config)
         document = repository.create_pending_document(
             filename=filename,
             content_type=content_type or "application/octet-stream",
             size_bytes=len(raw_bytes),
+            owner_id=user.id,
         )
         repository.enqueue_document_job(document.id, raw_bytes)
         return {
@@ -223,61 +250,72 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/documents")
-    def list_documents(limit: int = 50) -> Dict[str, Any]:
+    def list_documents(request: Request, limit: int = 50) -> Dict[str, Any]:
         """列出已上传文档。"""
 
         config = Configuration.from_env()
         repository = get_repository(config)
-        return {"documents": repository.list_documents(limit=limit)}
+        user = require_user(request, config)
+        return {"documents": repository.list_documents(limit=limit, owner_id=user.id)}
 
     @app.get("/documents/{document_id}")
-    def get_document(document_id: str) -> Dict[str, Any]:
+    def get_document(document_id: str, request: Request) -> Dict[str, Any]:
         """读取单个文档及其切块。"""
 
         config = Configuration.from_env()
         repository = get_repository(config)
-        document = repository.get_document(document_id)
+        user = require_user(request, config)
+        document = repository.get_document(document_id, owner_id=user.id)
         if document is None:
             raise HTTPException(status_code=404, detail="未找到文档")
         return document
 
 
     @app.post("/documents/{document_id}/retry")
-    def retry_document(document_id: str) -> Dict[str, Any]:
+    def retry_document(document_id: str, request: Request) -> Dict[str, Any]:
         config = Configuration.from_env()
         repository = get_repository(config)
-        document = repository.get_document(document_id)
+        user = require_user(request, config)
+        document = repository.get_document(document_id, owner_id=user.id)
         if document is None:
             raise HTTPException(status_code=404, detail="未找到文档")
         if document.get("status") != "failed":
             raise HTTPException(status_code=400, detail="仅失败文档可以重试")
-        job = repository.retry_failed_document(document_id)
+        job = repository.retry_failed_document(document_id, owner_id=user.id)
         if job is None:
             raise HTTPException(status_code=400, detail="文档缺少可重试的上传内容")
-        refreshed = repository.get_document(document_id)
+        refreshed = repository.get_document(document_id, owner_id=user.id)
         return {"document": refreshed, "job": {key: value for key, value in job.items() if key != "payload"}}
 
     @app.delete("/documents/{document_id}")
-    def delete_document(document_id: str) -> Dict[str, Any]:
+    def delete_document(document_id: str, request: Request) -> Dict[str, Any]:
         """删除单个文档及其切块。"""
 
         config = Configuration.from_env()
         repository = get_repository(config)
-        if not repository.delete_document(document_id):
+        user = require_user(request, config)
+        if not repository.delete_document(document_id, owner_id=user.id):
             raise HTTPException(status_code=404, detail="未找到文档")
         return {"deleted": True, "document_id": document_id}
 
     @app.post("/research", response_model=ResearchResponse)
-    def run_research(payload: ResearchRequest) -> ResearchResponse:
+    def run_research(payload: ResearchRequest, request: Request) -> ResearchResponse:
+        config = _build_config(payload)
+        user = require_user(request, config)
+        usage_limiter.start_research(
+            user.id, daily_limit=config.research_daily_limit,
+            cooldown_seconds=config.research_cooldown_seconds,
+        )
         try:
-            config = _build_config(payload)
-            agent = DeepResearchAgent(config=config, repository=get_repository(config))
+            agent = DeepResearchAgent(config=config, repository=get_repository(config), owner_id=user.id)
             result = agent.run(payload.topic)
         except ValueError as exc:  # 通常来自不受支持的配置
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:  # pragma: no cover - 防御性保护
             raise HTTPException(status_code=500, detail="研究失败") from exc
 
+        finally:
+            usage_limiter.finish_research(user.id)
         todo_payload = [
             {
                 "id": item.id,
@@ -299,21 +337,37 @@ def create_app() -> FastAPI:
         )
 
     @app.post("/research/stream")
-    def stream_research(payload: ResearchRequest) -> StreamingResponse:
+    def stream_research(payload: ResearchRequest, request: Request) -> StreamingResponse:
+        config = _build_config(payload)
+        user = require_user(request, config)
+        usage_limiter.start_research(
+            user.id,
+            daily_limit=config.research_daily_limit,
+            cooldown_seconds=config.research_cooldown_seconds,
+        )
         try:
-            config = _build_config(payload)
-            agent = DeepResearchAgent(config=config, repository=get_repository(config))
+            agent = DeepResearchAgent(
+                config=config,
+                repository=get_repository(config),
+                owner_id=user.id,
+            )
         except ValueError as exc:
+            usage_limiter.finish_research(user.id)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            usage_limiter.finish_research(user.id)
+            raise HTTPException(status_code=500, detail="研究服务初始化失败") from exc
 
         def event_iterator() -> Iterator[str]:
             try:
                 for event in agent.run_stream(payload.topic):
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-            except Exception as exc:  # pragma: no cover - 防御性保护
+            except Exception:  # pragma: no cover - 防御性保护
                 logger.exception("Streaming research failed")
-                error_payload = {"type": "error", "detail": str(exc)}
+                error_payload = {"type": "error", "detail": "研究过程中发生错误"}
                 yield f"data: {json.dumps(error_payload, ensure_ascii=False)}\n\n"
+            finally:
+                usage_limiter.finish_research(user.id)
 
         return StreamingResponse(
             event_iterator(),

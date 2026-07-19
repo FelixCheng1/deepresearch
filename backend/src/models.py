@@ -67,6 +67,7 @@ class ResearchRun:
     id: str
     topic: str
     search_api: str
+    owner_id: str = "local-dev"
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -143,6 +144,7 @@ class ResearchDocument:
     """上传到文档库的原始文本文件。"""
 
     id: str
+    owner_id: str = "local-dev"
     filename: str
     content_type: str
     size_bytes: int

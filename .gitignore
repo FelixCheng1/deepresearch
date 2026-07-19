@@ -11,7 +11,11 @@ backend/pytest-cache-files-*/
 .pytest_cache/
 frontend/.env.local
 frontend/.env.*.local
-
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
 # Environment files
 .env
 
@@ -23,3 +27,10 @@ dist/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Local tooling
+.agents/
+skills-lock.json
+*.log
+*.sqlite
+*.sqlite3

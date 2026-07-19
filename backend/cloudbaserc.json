@@ -1,0 +1,6 @@
+{
+  "envId": "my-web-app-d6gd5x4us942f951e",
+  "cloudrun": {
+    "name": "deepresearch-api"
+  }
+}

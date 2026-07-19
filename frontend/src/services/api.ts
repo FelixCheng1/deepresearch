@@ -1,6 +1,21 @@
+import { getAccessToken } from "./auth";
+
 const baseURL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
+
+async function authenticatedFetch(
+  input: RequestInfo | URL,
+  init: RequestInit = {}
+): Promise<Response> {
+  const token = await getAccessToken();
+  if (!token) {
+    throw new Error("登录已失效，请重新登录");
+  }
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", `Bearer ${token}`);
+  return fetch(input, { ...init, headers });
+}
 export interface ResearchRequest {
   topic: string;
   search_api?: string;
@@ -66,7 +81,7 @@ export interface ResearchRunDetail extends ResearchRunSummary {
 }
 
 export async function listResearchRuns(limit = 20): Promise<ResearchRunSummary[]> {
-  const response = await fetch(`${baseURL}/research/runs?limit=${limit}`);
+  const response = await authenticatedFetch(`${baseURL}/research/runs?limit=${limit}`);
   if (!response.ok) {
     const errorText = await response.text().catch(() => "");
     throw new Error(errorText || `研究历史请求失败，状态码：${response.status}`);
@@ -76,7 +91,7 @@ export async function listResearchRuns(limit = 20): Promise<ResearchRunSummary[]
 }
 
 export async function getResearchRun(runId: string): Promise<ResearchRunDetail> {
-  const response = await fetch(`${baseURL}/research/runs/${encodeURIComponent(runId)}`);
+  const response = await authenticatedFetch(`${baseURL}/research/runs/${encodeURIComponent(runId)}`);
   if (!response.ok) {
     const errorText = await response.text().catch(() => "");
     throw new Error(errorText || `研究历史请求失败，状态码：${response.status}`);
@@ -89,7 +104,7 @@ export async function runResearchStream(
   onEvent: (event: ResearchStreamEvent) => void,
   options: StreamOptions = {}
 ): Promise<void> {
-  const response = await fetch(`${baseURL}/research/stream`, {
+  const response = await authenticatedFetch(`${baseURL}/research/stream`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -194,7 +209,7 @@ export async function uploadDocument(file: File): Promise<DocumentSummary> {
   const formData = new FormData();
   formData.append("file", file);
 
-  const response = await fetch(`${baseURL}/documents/upload`, {
+  const response = await authenticatedFetch(`${baseURL}/documents/upload`, {
     method: "POST",
     body: formData
   });
@@ -209,7 +224,7 @@ export async function uploadDocument(file: File): Promise<DocumentSummary> {
 }
 
 export async function listDocuments(): Promise<DocumentSummary[]> {
-  const response = await fetch(`${baseURL}/documents`);
+  const response = await authenticatedFetch(`${baseURL}/documents`);
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => "");
@@ -221,7 +236,7 @@ export async function listDocuments(): Promise<DocumentSummary[]> {
 }
 
 export async function getDocument(documentId: string): Promise<DocumentDetail> {
-  const response = await fetch(`${baseURL}/documents/${documentId}`);
+  const response = await authenticatedFetch(`${baseURL}/documents/${documentId}`);
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => "");
@@ -231,7 +246,7 @@ export async function getDocument(documentId: string): Promise<DocumentDetail> {
   return await response.json() as DocumentDetail;
 }
 export async function retryDocument(documentId: string): Promise<DocumentSummary> {
-  const response = await fetch(`${baseURL}/documents/${documentId}/retry`, {
+  const response = await authenticatedFetch(`${baseURL}/documents/${documentId}/retry`, {
     method: "POST"
   });
 
@@ -245,7 +260,7 @@ export async function retryDocument(documentId: string): Promise<DocumentSummary
 }
 
 export async function deleteDocument(documentId: string): Promise<void> {
-  const response = await fetch(`${baseURL}/documents/${documentId}`, {
+  const response = await authenticatedFetch(`${baseURL}/documents/${documentId}`, {
     method: "DELETE"
   });
 

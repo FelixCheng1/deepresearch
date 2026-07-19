@@ -44,6 +44,7 @@ class RepositoryRetriever:
     embedding_service: EmbeddingProvider | None = None
     reranker: Reranker | None = None
     rerank_top_n: int = 20
+    owner_id: str | None = None
     calls: list[str] = field(default_factory=list)
 
     def retrieve(self, query: str) -> list[ResearchDocumentChunk]:
@@ -61,6 +62,7 @@ class RepositoryRetriever:
             limit=candidate_limit,
             min_score=self.min_score,
             query_embedding=query_embedding,
+            owner_id=self.owner_id,
         )
         if self.reranker is None:
             return chunks[: self.limit]
@@ -71,7 +73,7 @@ class RepositoryRetriever:
             return chunks[: self.limit]
 
 
-def create_retriever(config: Configuration, repository: ResearchRepository) -> Retriever:
+def create_retriever(config: Configuration, repository: ResearchRepository, owner_id: str | None = None) -> Retriever:
     """根据 RAG 开关创建检索器。"""
 
     if not config.rag_enabled:
@@ -86,6 +88,7 @@ def create_retriever(config: Configuration, repository: ResearchRepository) -> R
             reranker = None
     return RepositoryRetriever(
         repository=repository,
+        owner_id=owner_id,
         limit=max(1, min(config.rag_top_k, 20)),
         min_score=max(0.0, config.rag_min_score),
         embedding_service=embedding_service,

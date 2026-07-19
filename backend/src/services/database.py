@@ -63,6 +63,7 @@ class ResearchRunRow(Base):
     __tablename__ = "research_runs"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     topic: Mapped[str] = mapped_column(Text, nullable=False)
     search_api: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -193,6 +194,7 @@ class DocumentRow(Base):
     __tablename__ = "documents"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     filename: Mapped[str] = mapped_column(Text, nullable=False)
     content_type: Mapped[str] = mapped_column(String(128), nullable=False, default="text/plain")
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)

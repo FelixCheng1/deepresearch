@@ -116,6 +116,24 @@ class Configuration(BaseModel):
         title="数据库 URL",
         description="为未来 Postgres + pgvector 预留的数据库连接字符串",
     )
+    cloudbase_env_id: str | None = Field(
+        default=None,
+        title="CloudBase 环境 ID",
+        description="用于验证 CloudBase 登录令牌。",
+    )
+    auth_required: bool = Field(
+        default=False,
+        title="强制登录",
+        description="生产环境必须显式设为 true。",
+    )
+    upload_max_bytes: int = Field(
+        default=10 * 1024 * 1024,
+        title="上传文件上限",
+        description="单个上传文件允许的最大字节数。",
+    )
+    research_daily_limit: int = Field(default=10, ge=1, le=1000)
+    research_cooldown_seconds: int = Field(default=60, ge=0, le=3600)
+    upload_daily_limit: int = Field(default=20, ge=1, le=1000)
     rag_enabled: bool = Field(
         default=False,
         title="启用 RAG",
@@ -256,6 +274,12 @@ class Configuration(BaseModel):
             "enable_notes": os.getenv("ENABLE_NOTES"),
             "notes_workspace": os.getenv("NOTES_WORKSPACE"),
             "database_url": os.getenv("DATABASE_URL"),
+            "cloudbase_env_id": os.getenv("CLOUDBASE_ENV_ID"),
+            "auth_required": os.getenv("AUTH_REQUIRED"),
+            "upload_max_bytes": os.getenv("UPLOAD_MAX_BYTES"),
+            "research_daily_limit": os.getenv("RESEARCH_DAILY_LIMIT"),
+            "research_cooldown_seconds": os.getenv("RESEARCH_COOLDOWN_SECONDS"),
+            "upload_daily_limit": os.getenv("UPLOAD_DAILY_LIMIT"),
             "rag_enabled": os.getenv("RAG_ENABLED"),
             "rag_top_k": os.getenv("RAG_TOP_K"),
             "rag_context_max_chars": os.getenv("RAG_CONTEXT_MAX_CHARS"),

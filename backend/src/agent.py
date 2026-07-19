@@ -63,10 +63,12 @@ class DeepResearchAgent:
         repository: ResearchRepository | None = None,
         retriever: Retriever | None = None,
         chat_model: Any | None = None,
+        owner_id: str = "local-dev",
     ) -> None:
         """使用配置和共享工具初始化编排器。"""
 
         self.config = config or Configuration.from_env()
+        self.owner_id = owner_id
         self.llm = chat_model or create_chat_model(self.config)
 
         self.note_store = (
@@ -75,7 +77,7 @@ class DeepResearchAgent:
             else None
         )
         self.repository = repository or create_research_repository(self.config)
-        self.retriever = retriever or create_retriever(self.config, self.repository)
+        self.retriever = retriever or create_retriever(self.config, self.repository, owner_id=self.owner_id)
         self._tool_tracker = ToolCallTracker(
             self.config.notes_workspace if self.config.enable_notes else None
         )
@@ -137,7 +139,7 @@ class DeepResearchAgent:
                     continue
 
             if "error" in error_holder:
-                yield {"type": "error", "detail": str(error_holder["error"])}
+                yield {"type": "error", "detail": "研究过程中发生错误"}
                 return
         finally:
             worker.join(timeout=0.2)
@@ -173,6 +175,7 @@ class DeepResearchAgent:
         self.repository.save_run(
             ResearchRun(
                 id=self.run_id,
+                owner_id=self.owner_id,
                 topic=state.research_topic or "",
                 search_api=str(self.config.search_api.value),
             )
@@ -848,7 +851,7 @@ class DeepResearchAgent:
         merged: list[ResearchDocumentChunk] = []
         for chunk in chunks:
             if chunk.document_id not in documents:
-                documents[chunk.document_id] = self.repository.get_document(chunk.document_id)
+                documents[chunk.document_id] = self.repository.get_document(chunk.document_id, owner_id=self.owner_id)
             detail = documents[chunk.document_id]
             if not detail:
                 merged.append(chunk)

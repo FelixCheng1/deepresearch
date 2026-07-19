@@ -1,0 +1,16 @@
+{
+  "envId": "my-web-app-d6gd5x4us942f951e",
+  "app": {
+    "serviceName": "deepresearch-web",
+    "framework": "vite",
+    "installCommand": "npm ci",
+    "buildCommand": "npm run build",
+    "outputDir": "./dist",
+    "deployPath": "/",
+    "envVariables": {
+      "VITE_API_BASE_URL": "https://deepresearch-api-282207-9-1453926419.sh.run.tcloudbase.com",
+      "VITE_CLOUDBASE_ENV_ID": "my-web-app-d6gd5x4us942f951e",
+      "VITE_CLOUDBASE_PUBLISHABLE_KEY": "eyJhbGciOiJSUzI1NiIsImtpZCI6IjQzODc1OTM4LTU1ZmMtNDQ5My1hOThkLWI5YWYzYjg4OTYwNiJ9.eyJpc3MiOiJodHRwczovL215LXdlYi1hcHAtZDZnZDV4NHVzOTQyZjk1MWUuYXAtc2hhbmdoYWkudGNiLWFwaS50ZW5jZW50Y2xvdWRhcGkuY29tIiwic3ViIjoiYW5vbiIsImF1ZCI6Im15LXdlYi1hcHAtZDZnZDV4NHVzOTQyZjk1MWUiLCJleHAiOjQwODc3MjA3MTksImlhdCI6MTc4NDAzNzUxOSwibm9uY2UiOiJjTWhGRVBPSVJtYWJaQTNnOUpIbjFBIiwiYXRfaGFzaCI6ImNNaEZFUE9JUm1hYlpBM2c5SkhuMUEiLCJuYW1lIjoiQW5vbnltb3VzIiwic2NvcGUiOiJhbm9ueW1vdXMiLCJwcm9qZWN0X2lkIjoibXktd2ViLWFwcC1kNmdkNXg0dXM5NDJmOTUxZSIsIm1ldGEiOnsicGxhdGZvcm0iOiJQdWJsaXNoYWJsZUtleSJ9LCJyb2xlIjoiYW5vbiIsImlzX2Fub255bW91cyI6dHJ1ZSwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiYW5vbnltb3VzIiwicHJvdmlkZXJzIjpbImFub255bW91cyJdfSwidXNlcl9tZXRhZGF0YSI6eyJuYW1lIjoiQW5vbnltb3VzIn0sInVzZXJfdHlwZSI6IiIsImNsaWVudF90eXBlIjoiY2xpZW50X3VzZXIiLCJpc19zeXN0ZW1fYWRtaW4iOmZhbHNlfQ.Jd0B6Tfkr7SAHFEnt1MykQjcjO6sYupA1CNYeU4dvXaCwChwhbrFeuM2p5MmAgjTu0yZW19-9VL4TMSHwwHXLtq_Xc48nrm8WwCAtxKS3KGCEh4464IP43HS8CA49RdJpr3Cdw9HF1GOvzRiFOtUf-U6NqdSaax7qNTx4obeL-ypT2d1cCpOSbN7Vc9P0oBoOzanVwa0S129gNBykfNUUzNMmXEey14USl1xUJ1b49SZ4jYs9OkfFeq-rv7uGUjOmhSoEg15wE79ZNKjsg3jc9IGdN-9ofrg0TiBppcLSmwXh1Y2uYiOnGfgmVdHzIkaLU4_bBfakYgCnf4AtiwWMQ"
+    }
+  }
+}

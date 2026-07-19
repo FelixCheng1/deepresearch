@@ -57,10 +57,10 @@ class ResearchRepository(Protocol):
     def save_tool_call(self, tool_call: ResearchToolCall) -> None:
         """Save one structured tool call for history replay."""
 
-    def list_runs(self, limit: int = 20) -> list[dict[str, Any]]:
+    def list_runs(self, limit: int = 20, owner_id: str | None = None) -> list[dict[str, Any]]:
         """List research runs by creation time descending."""
 
-    def get_run(self, run_id: str) -> dict[str, Any] | None:
+    def get_run(self, run_id: str, owner_id: str | None = None) -> dict[str, Any] | None:
         """Read one research run with tasks, sources and report."""
 
     def save_document(
@@ -70,6 +70,7 @@ class ResearchRepository(Protocol):
         content_type: str,
         raw_text: str,
         size_bytes: int,
+        owner_id: str = "local-dev",
     ) -> ResearchDocument:
         """Save an uploaded document and chunks."""
 
@@ -79,6 +80,7 @@ class ResearchRepository(Protocol):
         filename: str,
         content_type: str,
         size_bytes: int,
+        owner_id: str = "local-dev",
     ) -> ResearchDocument:
         """Create a document record that is waiting for background parsing."""
 
@@ -106,7 +108,7 @@ class ResearchRepository(Protocol):
     def fail_document_job(self, job_id: str, error_message: str) -> bool:
         """Mark a document job as failed."""
 
-    def retry_failed_document(self, document_id: str) -> dict[str, Any] | None:
+    def retry_failed_document(self, document_id: str, owner_id: str | None = None) -> dict[str, Any] | None:
         """Create a new pending job for a failed document."""
 
     def reset_running_document_jobs(self) -> int:
@@ -115,13 +117,13 @@ class ResearchRepository(Protocol):
     def rebuild_document(self, document_id: str) -> bool:
         """Rebuild chunks and embeddings from stored raw text."""
 
-    def list_documents(self, limit: int = 50) -> list[dict[str, Any]]:
+    def list_documents(self, limit: int = 50, owner_id: str | None = None) -> list[dict[str, Any]]:
         """List uploaded documents by creation time descending."""
 
-    def get_document(self, document_id: str) -> dict[str, Any] | None:
+    def get_document(self, document_id: str, owner_id: str | None = None) -> dict[str, Any] | None:
         """Read a document and its chunks."""
 
-    def delete_document(self, document_id: str) -> bool:
+    def delete_document(self, document_id: str, owner_id: str | None = None) -> bool:
         """Delete a document and its chunks."""
 
     def search_document_chunks(
@@ -130,6 +132,7 @@ class ResearchRepository(Protocol):
         limit: int = 5,
         min_score: float = 0.0,
         query_embedding: list[float] | None = None,
+        owner_id: str | None = None,
     ) -> list[ResearchDocumentChunk]:
         """Search document chunks with text/vector signals."""
 
@@ -162,13 +165,13 @@ class InMemoryResearchRepository:
     def save_tool_call(self, tool_call: ResearchToolCall) -> None:
         self.tool_calls[(tool_call.run_id, tool_call.event_id)] = tool_call
 
-    def list_runs(self, limit: int = 20) -> list[dict[str, Any]]:
-        runs = sorted(self.runs.values(), key=lambda item: item.created_at, reverse=True)
+    def list_runs(self, limit: int = 20, owner_id: str | None = None) -> list[dict[str, Any]]:
+        runs = sorted((run for run in self.runs.values() if owner_id is None or run.owner_id == owner_id), key=lambda item: item.created_at, reverse=True)
         return [self._run_summary(run) for run in runs[:limit]]
 
-    def get_run(self, run_id: str) -> dict[str, Any] | None:
+    def get_run(self, run_id: str, owner_id: str | None = None) -> dict[str, Any] | None:
         run = self.runs.get(run_id)
-        if not run:
+        if not run or (owner_id is not None and run.owner_id != owner_id):
             return None
 
         tasks = [
@@ -200,12 +203,14 @@ class InMemoryResearchRepository:
         content_type: str,
         raw_text: str,
         size_bytes: int,
+        owner_id: str = "local-dev",
     ) -> ResearchDocument:
         document = _build_document(
             filename=filename,
             content_type=content_type,
             raw_text=raw_text,
             size_bytes=size_bytes,
+            owner_id=owner_id,
             embedding_service=self.embedding_service,
         )
         self.documents[document.id] = document
@@ -217,9 +222,11 @@ class InMemoryResearchRepository:
         filename: str,
         content_type: str,
         size_bytes: int,
+        owner_id: str = "local-dev",
     ) -> ResearchDocument:
         document = ResearchDocument(
             id=uuid4().hex,
+            owner_id=owner_id,
             filename=filename,
             content_type=content_type,
             size_bytes=size_bytes,
@@ -247,6 +254,7 @@ class InMemoryResearchRepository:
             content_type=content_type,
             raw_text=raw_text,
             size_bytes=existing.size_bytes,
+            owner_id=existing.owner_id,
             embedding_service=self.embedding_service,
             document_id=document_id,
             created_at=existing.created_at,
@@ -322,9 +330,9 @@ class InMemoryResearchRepository:
         job["finished_at"] = datetime.now(timezone.utc)
         return True
 
-    def retry_failed_document(self, document_id: str) -> dict[str, Any] | None:
+    def retry_failed_document(self, document_id: str, owner_id: str | None = None) -> dict[str, Any] | None:
         document = self.documents.get(document_id)
-        if document is None or document.status != "failed":
+        if document is None or document.status != "failed" or (owner_id is not None and document.owner_id != owner_id):
             return None
         latest = sorted(
             [job for job in self.document_jobs.values() if job["document_id"] == document_id and job.get("payload")],
@@ -357,6 +365,7 @@ class InMemoryResearchRepository:
             content_type=existing.content_type,
             raw_text=existing.raw_text,
             size_bytes=existing.size_bytes,
+            owner_id=existing.owner_id,
             embedding_service=self.embedding_service,
             document_id=document_id,
             created_at=existing.created_at,
@@ -364,19 +373,19 @@ class InMemoryResearchRepository:
         self.documents[document_id] = rebuilt
         return True
 
-    def list_documents(self, limit: int = 50) -> list[dict[str, Any]]:
+    def list_documents(self, limit: int = 50, owner_id: str | None = None) -> list[dict[str, Any]]:
         safe_limit = max(1, min(limit, 100))
-        documents = sorted(self.documents.values(), key=lambda item: item.created_at, reverse=True)
+        documents = sorted((document for document in self.documents.values() if owner_id is None or document.owner_id == owner_id), key=lambda item: item.created_at, reverse=True)
         return [_document_to_summary(document) for document in documents[:safe_limit]]
 
-    def get_document(self, document_id: str) -> dict[str, Any] | None:
+    def get_document(self, document_id: str, owner_id: str | None = None) -> dict[str, Any] | None:
         document = self.documents.get(document_id)
-        if document is None:
+        if document is None or (owner_id is not None and document.owner_id != owner_id):
             return None
         return _document_to_detail(document)
 
-    def delete_document(self, document_id: str) -> bool:
-        if document_id not in self.documents:
+    def delete_document(self, document_id: str, owner_id: str | None = None) -> bool:
+        if document_id not in self.documents or (owner_id is not None and self.documents[document_id].owner_id != owner_id):
             return False
         del self.documents[document_id]
         return True
@@ -387,13 +396,15 @@ class InMemoryResearchRepository:
         limit: int = 5,
         min_score: float = 0.0,
         query_embedding: list[float] | None = None,
+        owner_id: str | None = None,
     ) -> list[ResearchDocumentChunk]:
-        chunks = [chunk for document in self.documents.values() for chunk in document.chunks]
+        chunks = [chunk for document in self.documents.values() if owner_id is None or document.owner_id == owner_id for chunk in document.chunks]
         return rank_chunks(query, chunks, limit=limit, min_score=min_score, query_embedding=query_embedding)
 
     def _run_summary(self, run: ResearchRun) -> dict[str, Any]:
         return {
             "id": run.id,
+            "owner_id": run.owner_id,
             "topic": run.topic,
             "search_api": run.search_api,
             "created_at": run.created_at.isoformat(),
@@ -428,12 +439,14 @@ class PostgresResearchRepository:
             if row is None:
                 row = ResearchRunRow(
                     id=run.id,
+                    owner_id=run.owner_id,
                     topic=run.topic,
                     search_api=run.search_api,
                     created_at=run.created_at,
                 )
                 session.add(row)
             else:
+                row.owner_id = run.owner_id
                 row.topic = run.topic
                 row.search_api = run.search_api
                 row.created_at = run.created_at
@@ -509,7 +522,7 @@ class PostgresResearchRepository:
             row.created_at = tool_call.created_at
             session.commit()
 
-    def list_runs(self, limit: int = 20) -> list[dict[str, Any]]:
+    def list_runs(self, limit: int = 20, owner_id: str | None = None) -> list[dict[str, Any]]:
         safe_limit = max(1, min(limit, 100))
         with self._session() as session:
             rows = session.scalars(
@@ -517,9 +530,10 @@ class PostgresResearchRepository:
                 .order_by(ResearchRunRow.created_at.desc())
                 .limit(safe_limit)
             ).all()
+            rows = [row for row in rows if owner_id is None or row.owner_id == owner_id]
             return [_run_row_to_summary(row) for row in rows]
 
-    def get_run(self, run_id: str) -> dict[str, Any] | None:
+    def get_run(self, run_id: str, owner_id: str | None = None) -> dict[str, Any] | None:
         with self._session() as session:
             stmt = (
                 select(ResearchRunRow)
@@ -532,7 +546,7 @@ class PostgresResearchRepository:
                 )
             )
             row = session.execute(stmt).unique().scalar_one_or_none()
-            if row is None:
+            if row is None or (owner_id is not None and row.owner_id != owner_id):
                 return None
 
             return {
@@ -550,17 +564,20 @@ class PostgresResearchRepository:
         content_type: str,
         raw_text: str,
         size_bytes: int,
+        owner_id: str = "local-dev",
     ) -> ResearchDocument:
         document = _build_document(
             filename=filename,
             content_type=content_type,
             raw_text=raw_text,
             size_bytes=size_bytes,
+            owner_id=owner_id,
             embedding_service=self.embedding_service,
         )
         with self._session() as session:
             row = DocumentRow(
                 id=document.id,
+                owner_id=document.owner_id,
                 filename=document.filename,
                 content_type=document.content_type,
                 size_bytes=document.size_bytes,
@@ -594,9 +611,11 @@ class PostgresResearchRepository:
         filename: str,
         content_type: str,
         size_bytes: int,
+        owner_id: str = "local-dev",
     ) -> ResearchDocument:
         document = ResearchDocument(
             id=uuid4().hex,
+            owner_id=owner_id,
             filename=filename,
             content_type=content_type,
             size_bytes=size_bytes,
@@ -610,6 +629,7 @@ class PostgresResearchRepository:
             session.add(
                 DocumentRow(
                     id=document.id,
+                    owner_id=document.owner_id,
                     filename=document.filename,
                     content_type=document.content_type,
                     size_bytes=document.size_bytes,
@@ -638,6 +658,7 @@ class PostgresResearchRepository:
                 content_type=content_type,
                 raw_text=raw_text,
                 size_bytes=row.size_bytes,
+                owner_id=row.owner_id,
                 embedding_service=self.embedding_service,
                 document_id=document_id,
                 created_at=row.created_at,
@@ -740,10 +761,10 @@ class PostgresResearchRepository:
             session.commit()
             return True
 
-    def retry_failed_document(self, document_id: str) -> dict[str, Any] | None:
+    def retry_failed_document(self, document_id: str, owner_id: str | None = None) -> dict[str, Any] | None:
         with self._session() as session:
             document = session.get(DocumentRow, document_id)
-            if document is None or document.status != "failed":
+            if document is None or document.status != "failed" or (owner_id is not None and document.owner_id != owner_id):
                 return None
             latest = session.scalars(
                 select(DocumentJobRow)
@@ -789,6 +810,7 @@ class PostgresResearchRepository:
                 content_type=row.content_type,
                 raw_text=row.raw_text,
                 size_bytes=row.size_bytes,
+                owner_id=row.owner_id,
                 embedding_service=self.embedding_service,
                 document_id=document_id,
                 created_at=row.created_at,
@@ -814,7 +836,7 @@ class PostgresResearchRepository:
             session.commit()
             return True
 
-    def list_documents(self, limit: int = 50) -> list[dict[str, Any]]:
+    def list_documents(self, limit: int = 50, owner_id: str | None = None) -> list[dict[str, Any]]:
         safe_limit = max(1, min(limit, 100))
         with self._session() as session:
             rows = session.scalars(
@@ -823,23 +845,24 @@ class PostgresResearchRepository:
                 .limit(safe_limit)
                 .options(joinedload(DocumentRow.chunks))
             ).unique().all()
+            rows = [row for row in rows if owner_id is None or row.owner_id == owner_id]
             return [_document_row_to_summary(row) for row in rows]
 
-    def get_document(self, document_id: str) -> dict[str, Any] | None:
+    def get_document(self, document_id: str, owner_id: str | None = None) -> dict[str, Any] | None:
         with self._session() as session:
             row = session.execute(
                 select(DocumentRow)
                 .where(DocumentRow.id == document_id)
                 .options(joinedload(DocumentRow.chunks))
             ).unique().scalar_one_or_none()
-            if row is None:
+            if row is None or (owner_id is not None and row.owner_id != owner_id):
                 return None
             return _document_row_to_detail(row)
 
-    def delete_document(self, document_id: str) -> bool:
+    def delete_document(self, document_id: str, owner_id: str | None = None) -> bool:
         with self._session() as session:
             row = session.get(DocumentRow, document_id)
-            if row is None:
+            if row is None or (owner_id is not None and row.owner_id != owner_id):
                 return False
             session.delete(row)
             session.commit()
@@ -851,6 +874,7 @@ class PostgresResearchRepository:
         limit: int = 5,
         min_score: float = 0.0,
         query_embedding: list[float] | None = None,
+        owner_id: str | None = None,
     ) -> list[ResearchDocumentChunk]:
         with self._session() as session:
             rows = session.execute(
@@ -858,6 +882,7 @@ class PostgresResearchRepository:
                 .join(DocumentChunkRow.document)
                 .options(joinedload(DocumentChunkRow.document))
             ).scalars().all()
+            rows = [row for row in rows if owner_id is None or row.document.owner_id == owner_id]
             chunks = [_chunk_row_to_model(row) for row in rows]
         return rank_chunks(query, chunks, limit=limit, min_score=min_score, query_embedding=query_embedding)
 
@@ -916,6 +941,7 @@ def _build_document(
     content_type: str,
     raw_text: str,
     size_bytes: int,
+    owner_id: str = "local-dev",
     embedding_service: EmbeddingProvider | None = None,
     document_id: str | None = None,
     created_at: datetime | None = None,
@@ -942,6 +968,7 @@ def _build_document(
     summary = _summarize_text(raw_text)
     return ResearchDocument(
         id=document_id,
+        owner_id=owner_id,
         filename=filename,
         content_type=content_type or _content_type_for_filename(filename),
         size_bytes=size_bytes,
@@ -1021,6 +1048,7 @@ def _tool_call_to_dict(tool_call: ResearchToolCall) -> dict[str, Any]:
 def _run_row_to_summary(row: ResearchRunRow) -> dict[str, Any]:
     return {
         "id": row.id,
+        "owner_id": row.owner_id,
         "topic": row.topic,
         "search_api": row.search_api,
         "created_at": row.created_at.isoformat(),
@@ -1076,6 +1104,7 @@ def _tool_call_row_to_dict(row: ResearchToolCallRow) -> dict[str, Any]:
 def _document_to_summary(document: ResearchDocument) -> dict[str, Any]:
     return {
         "id": document.id,
+        "owner_id": document.owner_id,
         "filename": document.filename,
         "content_type": document.content_type,
         "size_bytes": document.size_bytes,
@@ -1144,6 +1173,7 @@ def _chunk_to_dict(chunk: ResearchDocumentChunk) -> dict[str, Any]:
 def _document_row_to_summary(row: DocumentRow) -> dict[str, Any]:
     return {
         "id": row.id,
+        "owner_id": row.owner_id,
         "filename": row.filename,
         "content_type": row.content_type,
         "size_bytes": row.size_bytes,
