@@ -21,6 +21,7 @@ coverage.xml
 htmlcov/
 # Environment files
 .env
+.mcp.json
 
 # Node / frontend
 node_modules/

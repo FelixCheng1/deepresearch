@@ -11,6 +11,11 @@
     <img src="https://img.shields.io/badge/pgvector-0.6+-4479A1?style=flat-square" alt="pgvector">
     <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="MIT License"></a>
   </p>
+
+  <p>
+    <a href="https://deepresearch-web-my-web-app-d6gd5x4us942f951e.webapps.tcloudbase.com"><img src="https://img.shields.io/badge/上线-2026--07--20-0e766b?style=flat-square" alt="上线 2026-07-20"></a>
+    <img src="https://img.shields.io/badge/CloudBase-1.0-1677FF?style=flat-square" alt="CloudBase">
+  </p>
 </div>
 
 <div align="center">
@@ -25,21 +30,21 @@
 
 **登录与注册**
 
-![DeepResearch 登录与注册](docs/images/login-register.png)
+![DeepResearch 登录与注册](assets/images/login-register.png)
 
-**研究工作台**
+**主题输入与历史快照**
 
-![DeepResearch 研究工作台](docs/images/research-workspace.png)
+![DeepResearch 主题输入与历史快照](assets/images/topic-input-history.png)
 
-**文档库与 RAG 检索**
+**Web 与 RAG 检索**
 
-![DeepResearch 文档库](docs/images/document-library.png)
+![DeepResearch Web 与 RAG 检索](assets/images/search-rag-results.png)
 
-**研究历史与回放**
+**最终报告**
 
-![DeepResearch 历史回放](docs/images/history-replay.png)
+![DeepResearch 最终报告](assets/images/final-report.png)
 
-用户完成登录后，可以上传文档并在工作台管理研究任务；输入主题并选择搜索引擎后，系统会展示 LangGraph 工作流节点、并行任务进度、引用来源、工具调用与最终 Markdown 报告，并支持从历史快照恢复完整界面状态。
+用户完成登录后，输入研究主题并选择搜索引擎，系统会展示 LangGraph 工作流节点、并行任务进度、Web 与 RAG 引用来源、工具调用轨迹与最终 Markdown 报告，并支持从历史快照恢复完整界面状态。
 
 ## 核心功能
 
