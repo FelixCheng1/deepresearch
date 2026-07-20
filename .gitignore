@@ -7,6 +7,7 @@ __pycache__/
 notes/
 rag-corpus/
 specs/
+docs/
 backend/test-tmp/
 backend/pytest-cache-files-*/
 .tmp-pytest/
