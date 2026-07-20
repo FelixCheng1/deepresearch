@@ -11,11 +11,6 @@
     <img src="https://img.shields.io/badge/pgvector-0.6+-4479A1?style=flat-square" alt="pgvector">
     <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="MIT License"></a>
   </p>
-
-  <p>
-    <a href="https://deepresearch-web-my-web-app-d6gd5x4us942f951e.webapps.tcloudbase.com"><img src="https://img.shields.io/badge/上线-2026--07--20-0e766b?style=flat-square" alt="上线 2026-07-20"></a>
-    <img src="https://img.shields.io/badge/CloudBase-1.0-1677FF?style=flat-square" alt="CloudBase">
-  </p>
 </div>
 
 <div align="center">
@@ -327,7 +322,6 @@ DeepResearch
 │   │   ├── services/       # Auth、HTTP/SSE 和历史回放
 │   │   └── router/         # 路由与认证守卫
 │   └── cloudbaserc.json    # CloudBase 构建配置
-├── docs/                   # 项目地图、数据库、RAG 与工程文档
 ├── docker-compose.yml      # PostgreSQL + pgvector
 └── .env.example            # 后端配置模板
 ```
