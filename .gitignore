@@ -5,6 +5,8 @@ __pycache__/
 *.pyo
 *.egg-info/
 notes/
+rag-corpus/
+specs/
 backend/test-tmp/
 backend/pytest-cache-files-*/
 .tmp-pytest/
