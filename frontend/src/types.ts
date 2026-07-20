@@ -16,6 +16,12 @@ export interface ToolCallLog {
   timestamp: number;
 }
 
+export interface SearchExecutionView {
+  requestedBackend: string;
+  actualBackend: string;
+  fallbackReason: string | null;
+}
+
 export interface TodoTaskView {
   id: number;
   title: string;
@@ -29,6 +35,7 @@ export interface TodoTaskView {
   noteId: string | null;
   notePath: string | null;
   toolCalls: ToolCallLog[];
+  searchExecution: SearchExecutionView | null;
 }
 
 export interface WorkflowNodeView {

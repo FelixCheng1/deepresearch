@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import queue
 import re
@@ -332,6 +333,33 @@ class DeepResearchAgent:
             self._step_for_task(state, task) - 1,
         )
         task.notices = notices
+        requested_backend = str(
+            (search_result or {}).get("requested_backend")
+            or self.config.search_api.value
+        )
+        fallback_reason = (search_result or {}).get("fallback_reason")
+        search_metadata = {
+            "type": "search_backend",
+            "task_id": task.id,
+            "step": self._step_for_task(state, task),
+            "requested_backend": requested_backend,
+            "actual_backend": backend,
+            "fallback_reason": fallback_reason,
+        }
+        self.repository.save_tool_call(
+            ResearchToolCall(
+                run_id=self.run_id,
+                # ToolCallTracker 使用正数；负任务 ID 为搜索元数据保留无冲突空间。
+                event_id=-task.id,
+                agent="研究检索代理",
+                tool="search",
+                parameters={"query": task.query, "requested_backend": requested_backend},
+                result=json.dumps(search_metadata, ensure_ascii=False),
+                task_id=task.id,
+                step=self._step_for_task(state, task),
+            )
+        )
+        self._emit_event(state, search_metadata)
 
         for notice in notices:
             if notice:
@@ -345,7 +373,7 @@ class DeepResearchAgent:
                     },
                 )
 
-        has_web_results = bool(search_result and search_result.get("results"))
+        has_web_results = bool(search_result and (search_result.get("results") or answer_text))
         if has_web_results:
             web_sources_summary, web_context = prepare_research_context(
                 search_result,
@@ -388,6 +416,8 @@ class DeepResearchAgent:
                 "raw_context": context,
                 "step": self._step_for_task(state, task),
                 "backend": backend,
+                "requested_backend": requested_backend,
+                "fallback_reason": fallback_reason,
                 "note_id": task.note_id,
                 "note_path": task.note_path,
                 "stream_token": task.stream_token,
@@ -1109,6 +1139,4 @@ def run_deep_research(topic: str, config: Configuration | None = None) -> Summar
 
     agent = DeepResearchAgent(config=config)
     return agent.run(topic)
-
-
 

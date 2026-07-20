@@ -289,6 +289,7 @@ async function handleSignOut(): Promise<void> {
 }
 
 onMounted(() => {
+  void research.loadCapabilities();
   void refreshDocuments();
   void refreshResearchRuns();
 });
@@ -347,6 +348,7 @@ onBeforeUnmount(() => {
   color: var(--muted);
   background: color-mix(in srgb, var(--surface) 94%, transparent);
   border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   box-shadow: 0 8px 24px rgba(17, 24, 39, 0.08);
   font: 500 0.68rem var(--font-mono);
   letter-spacing: 0.08em;
@@ -1162,6 +1164,47 @@ a,
   background: var(--warning-soft);
 }
 
+.search-execution {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--primary);
+  border-radius: 12px;
+  background: var(--primary-soft);
+}
+
+.search-execution div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.search-execution span {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.search-execution strong {
+  font-size: 13px;
+}
+
+.search-execution p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #92400e;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.search-execution .search-execution-ok {
+  color: var(--muted);
+}
+
 .task-notices h4 {
   margin: 0 0 8px;
   font-size: 13px;
@@ -1450,8 +1493,9 @@ a,
 }
 
 .document-item-button {
+  position: relative;
   width: 100%;
-  padding: 11px 12px;
+  padding: 11px 36px 11px 12px;
   border-radius: 12px;
   display: flex;
   flex-direction: column;
@@ -1468,6 +1512,22 @@ a,
   white-space: nowrap;
 }
 
+.document-toggle-mark {
+  position: absolute;
+  top: 50%;
+  right: 13px;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  transform: translateY(-50%);
+  transition: transform 160ms ease, color 160ms ease;
+}
+
+.document-item-button.active .document-toggle-mark {
+  color: var(--primary-strong);
+  transform: translateY(-50%) rotate(180deg);
+}
+
 .document-meta {
   font-size: 12px;
 }
@@ -1478,6 +1538,8 @@ a,
   flex-direction: column;
   gap: 10px;
   background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: 12px;
 }
 
 .document-detail-header div {

@@ -42,6 +42,20 @@ export interface ResearchRequest {
   search_api?: string;
 }
 
+export interface SearchCapability {
+  id: string;
+  label: string;
+  description: string;
+}
+
+export interface CapabilitiesResponse {
+  search: {
+    default_engine: string;
+    default_available: boolean;
+    engines: SearchCapability[];
+  };
+}
+
 export interface ResearchStreamEvent {
   type: string;
   [key: string]: unknown;
@@ -99,6 +113,15 @@ export interface ResearchRunDetail extends ResearchRunSummary {
     note_path: string | null;
   } | null;
   tool_calls: ResearchRunToolCall[];
+}
+
+export async function getCapabilities(): Promise<CapabilitiesResponse> {
+  const response = await authenticatedFetch(`${baseURL}/capabilities`);
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(errorText || `能力清单请求失败，状态码：${response.status}`);
+  }
+  return await response.json() as CapabilitiesResponse;
 }
 
 export async function listResearchRuns(limit = 20): Promise<ResearchRunSummary[]> {

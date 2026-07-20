@@ -67,6 +67,21 @@
         </ul>
       </section>
 
+      <section v-if="currentTask.searchExecution" class="search-execution">
+        <div>
+          <span>请求后端</span>
+          <strong>{{ currentTask.searchExecution.requestedBackend }}</strong>
+        </div>
+        <div>
+          <span>实际使用的后端</span>
+          <strong>{{ currentTask.searchExecution.actualBackend }}</strong>
+        </div>
+        <p v-if="currentTask.searchExecution.fallbackReason">
+          <strong>降级原因：</strong>{{ currentTask.searchExecution.fallbackReason }}
+        </p>
+        <p v-else class="search-execution-ok">本次未发生搜索后端降级。</p>
+      </section>
+
       <section
         class="summary-block"
         :class="{ 'block-highlight': summaryHighlight }"

@@ -22,6 +22,7 @@ export function useDocuments(isResearchActive: Ref<boolean>, isExpanded: Ref<boo
   const selectedDocument = ref<DocumentDetail | null>(null);
   const expandedChunkIds = ref<Set<string>>(new Set());
   let pollTimer: number | null = null;
+  let selectionRequestId = 0;
 
   const visibleDocumentChunks = computed(() =>
     selectedDocument.value?.status === "ready" ? selectedDocument.value.chunks.slice(0, 10) : []
@@ -34,9 +35,11 @@ export function useDocuments(isResearchActive: Ref<boolean>, isExpanded: Ref<boo
   });
 
   function clearSelectedDocument(): void {
+    selectionRequestId += 1;
     selectedDocumentId.value = null;
     selectedDocument.value = null;
     expandedChunkIds.value = new Set();
+    documentDetailLoading.value = false;
   }
 
   function updatePolling(): void {
@@ -68,17 +71,29 @@ export function useDocuments(isResearchActive: Ref<boolean>, isExpanded: Ref<boo
   }
 
   async function selectDocument(documentId: string): Promise<void> {
+    if (selectedDocumentId.value === documentId) {
+      clearSelectedDocument();
+      return;
+    }
+    const requestId = ++selectionRequestId;
     selectedDocumentId.value = documentId;
     selectedDocument.value = null;
     expandedChunkIds.value = new Set();
     documentDetailLoading.value = true;
     documentError.value = "";
     try {
-      selectedDocument.value = await getDocument(documentId);
+      const detail = await getDocument(documentId);
+      if (requestId === selectionRequestId && selectedDocumentId.value === documentId) {
+        selectedDocument.value = detail;
+      }
     } catch (error) {
-      documentError.value = error instanceof Error ? error.message : "读取文档详情失败";
+      if (requestId === selectionRequestId) {
+        documentError.value = error instanceof Error ? error.message : "读取文档详情失败";
+      }
     } finally {
-      documentDetailLoading.value = false;
+      if (requestId === selectionRequestId) {
+        documentDetailLoading.value = false;
+      }
     }
   }
 
@@ -159,7 +174,7 @@ export function useDocuments(isResearchActive: Ref<boolean>, isExpanded: Ref<boo
       documents.value = [document, ...documents.value.filter((item) => item.id !== document.id)];
       documentSuccess.value = `已上传 ${document.filename}，正在后台解析`;
       updatePolling();
-      await selectDocument(document.id);
+      clearSelectedDocument();
     } catch (error) {
       documentError.value = error instanceof Error ? error.message : "文档上传失败";
     } finally {

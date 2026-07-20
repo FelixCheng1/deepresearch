@@ -47,6 +47,8 @@ PostgreSQL：research_runs / documents / chunks / jobs
 
 `WorkspacePage` → `useResearchFlow` → `runResearchStream` → `/research/stream` → `DeepResearchAgent` → SSE → `useWorkflowState.consumeEvent`。
 
+进入工作台时，`useResearchFlow` 先调用 `/capabilities`，搜索选择器只显示当前部署已配置的后端。每个任务完成搜索后，后端通过 `search_backend` 事件返回请求后端、实际后端和降级原因，并复用工具调用存储供历史回放。
+
 ### 文档流
 
 `useDocuments` → 上传 API → pending document/job → worker 解析与切块 → 轮询列表 → RAG 按当前 `owner_id` 检索。

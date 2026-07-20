@@ -21,6 +21,49 @@ logger = logging.getLogger(__name__)
 
 MAX_TOKENS_PER_SOURCE = 2000
 
+SEARCH_ENGINE_LABELS = {
+    "advanced": "智能降级",
+    "duckduckgo": "DuckDuckGo",
+    "tavily": "Tavily",
+    "perplexity": "Perplexity",
+    "searxng": "SearXNG",
+}
+
+SEARCH_ENGINE_DESCRIPTIONS = {
+    "advanced": "优先使用 Tavily；不可用或请求失败时自动降级到 DuckDuckGo。",
+    "duckduckgo": "无需 API 密钥的网页搜索。",
+    "tavily": "面向 AI 研究的网页搜索，需要服务端配置 API 密钥。",
+    "perplexity": "返回 AI 总结和引用，需要服务端配置 API 密钥。",
+    "searxng": "连接服务端配置的自建 SearXNG 实例。",
+}
+
+
+def get_search_capabilities(config: Configuration) -> dict[str, Any]:
+    """返回不包含密钥的搜索能力清单。"""
+
+    available = {
+        "advanced": True,
+        "duckduckgo": True,
+        "tavily": bool(os.getenv("TAVILY_API_KEY")),
+        "perplexity": bool(os.getenv("PERPLEXITY_API_KEY")),
+        "searxng": bool(os.getenv("SEARXNG_URL")),
+    }
+    engines = [
+        {
+            "id": engine,
+            "label": SEARCH_ENGINE_LABELS[engine],
+            "description": SEARCH_ENGINE_DESCRIPTIONS[engine],
+        }
+        for engine in ("advanced", "duckduckgo", "tavily", "perplexity", "searxng")
+        if available[engine]
+    ]
+    default_engine = str(get_config_value(config.search_api))
+    return {
+        "default_engine": default_engine,
+        "default_available": available.get(default_engine, False),
+        "engines": engines,
+    }
+
 
 def dispatch_search(
     query: str,
@@ -29,20 +72,32 @@ def dispatch_search(
 ) -> Tuple[dict[str, Any] | None, list[str], str | None, str]:
     """执行配置的搜索后端，并标准化响应载荷。"""
 
-    search_api = get_config_value(config.search_api)
+    requested_backend = str(get_config_value(config.search_api))
+    primary_backend = requested_backend
+    fallback_reason: str | None = None
+
+    if requested_backend == "advanced":
+        if os.getenv("TAVILY_API_KEY"):
+            primary_backend = "tavily"
+        else:
+            primary_backend = "duckduckgo"
+            fallback_reason = "Tavily 未配置 API 密钥"
 
     try:
-        raw_response = _run_search_backend(query, search_api, config)
-    except Exception as exc:  # pragma: no cover - 防御性日志
-        logger.exception("Search backend %s failed: %s", search_api, exc)
-        raise
+        raw_response = _run_search_backend(query, primary_backend, config)
+    except Exception as exc:
+        logger.exception("Search backend %s failed: %s", primary_backend, exc)
+        if primary_backend == "duckduckgo":
+            raise
+        fallback_reason = f"{SEARCH_ENGINE_LABELS.get(primary_backend, primary_backend)} 请求失败（{type(exc).__name__}）"
+        raw_response = _duckduckgo_search(query)
 
     if isinstance(raw_response, str):
         notices = [raw_response]
-        logger.warning("Search backend %s returned text notice: %s", search_api, raw_response)
+        logger.warning("Search backend %s returned text notice: %s", primary_backend, raw_response)
         payload: dict[str, Any] = {
             "results": [],
-            "backend": search_api,
+            "backend": primary_backend,
             "answer": None,
             "notices": notices,
         }
@@ -50,7 +105,23 @@ def dispatch_search(
         payload = raw_response
         notices = list(payload.get("notices") or [])
 
-    backend_label = str(payload.get("backend") or search_api)
+    if primary_backend != "duckduckgo" and not _has_usable_content(payload):
+        fallback_reason = notices[0] if notices else f"{SEARCH_ENGINE_LABELS.get(primary_backend, primary_backend)} 未返回有效内容"
+        payload = _duckduckgo_search(query)
+        notices = list(payload.get("notices") or [])
+
+    actual_backend = str(payload.get("backend") or primary_backend)
+    if actual_backend != requested_backend and fallback_reason:
+        notices.insert(
+            0,
+            f"搜索后端已从 {requested_backend} 降级为 {actual_backend}：{fallback_reason}",
+        )
+    payload["requested_backend"] = requested_backend
+    payload["backend"] = actual_backend
+    payload["fallback_reason"] = fallback_reason if actual_backend != requested_backend else None
+    payload["notices"] = notices
+
+    backend_label = actual_backend
     answer_text = payload.get("answer")
     results = payload.get("results", [])
 
@@ -60,13 +131,17 @@ def dispatch_search(
 
     logger.info(
         "Search backend=%s resolved_backend=%s answer=%s results=%s",
-        search_api,
+        requested_backend,
         backend_label,
         bool(answer_text),
         len(results),
     )
 
     return payload, notices, answer_text, backend_label
+
+
+def _has_usable_content(payload: dict[str, Any]) -> bool:
+    return bool(payload.get("results") or payload.get("answer"))
 
 
 def _run_search_backend(query: str, search_api: str, config: Configuration) -> dict[str, Any] | str:
@@ -78,12 +153,6 @@ def _run_search_backend(query: str, search_api: str, config: Configuration) -> d
         return _searxng_search(query)
     if search_api == "perplexity":
         return _perplexity_search(query, config)
-    if search_api == "advanced":
-        try:
-            return _tavily_search(query, config)
-        except Exception as exc:
-            logger.info("Advanced search falling back to DuckDuckGo: %s", exc)
-            return _duckduckgo_search(query)
     return {
         "results": [],
         "backend": search_api,
@@ -141,7 +210,14 @@ def _tavily_search(query: str, config: Configuration) -> dict[str, Any]:
 
 
 def _searxng_search(query: str) -> dict[str, Any]:
-    base_url = os.getenv("SEARXNG_URL") or "http://localhost:8888"
+    base_url = os.getenv("SEARXNG_URL")
+    if not base_url:
+        return {
+            "results": [],
+            "backend": "searxng",
+            "answer": None,
+            "notices": ["未配置 SEARXNG_URL"],
+        }
     response = requests.get(
         f"{base_url.rstrip('/')}/search",
         params={"q": query, "format": "json"},

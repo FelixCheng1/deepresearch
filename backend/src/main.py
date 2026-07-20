@@ -23,6 +23,7 @@ from services.auth import require_user
 from services.document_worker import start_document_worker
 from services.rate_limit import DemoUsageLimiter
 from services.repository import ResearchRepository, create_research_repository
+from services.search import get_search_capabilities
 
 load_dotenv()
 
@@ -178,6 +179,14 @@ def create_app() -> FastAPI:
     @app.get("/healthz")
     def health_check() -> Dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/capabilities")
+    def get_capabilities(request: Request) -> Dict[str, Any]:
+        """返回当前部署真正可用且不包含敏感配置的客户端能力。"""
+
+        config = Configuration.from_env()
+        require_user(request, config)
+        return {"search": get_search_capabilities(config)}
 
     @app.get("/research/runs")
     def list_research_runs(request: Request, limit: int = 20) -> Dict[str, Any]:

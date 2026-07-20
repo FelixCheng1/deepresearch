@@ -19,7 +19,7 @@
         <span>研究主题</span>
         <textarea
           :value="topic"
-          placeholder="例如：探索多模态模型在 2025 年的关键突破"
+          placeholder="例如：2026 年人工智能 Agent 的主要技术趋势"
           rows="4"
           required
           @input="$emit('update:topic', ($event.target as HTMLTextAreaElement).value)"

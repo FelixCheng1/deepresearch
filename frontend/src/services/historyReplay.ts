@@ -1,5 +1,6 @@
 import type { ResearchRunDetail, ResearchRunSource } from "./api";
 import type {
+  SearchExecutionView,
   SourceItem,
   TodoTaskView,
   ToolCallLog,
@@ -134,6 +135,7 @@ export function buildHistoryReplay(run: ResearchRunDetail): HistoryReplayState {
       sourcesByTask.get(task.task_id) ?? []
     );
     const toolCalls = callsByTask.get(task.task_id) ?? [];
+    const searchExecution = parseSearchExecution(toolCalls);
     for (const call of toolCalls) {
       if (call.noteId && call.noteId === task.note_id) {
         call.notePath = task.note_path;
@@ -151,7 +153,8 @@ export function buildHistoryReplay(run: ResearchRunDetail): HistoryReplayState {
       notices: [],
       noteId: task.note_id,
       notePath: task.note_path,
-      toolCalls
+      toolCalls,
+      searchExecution
     };
   });
 
@@ -162,6 +165,29 @@ export function buildHistoryReplay(run: ResearchRunDetail): HistoryReplayState {
     workflowNodes: nodes,
     workflowEdges: edges
   };
+}
+
+function parseSearchExecution(toolCalls: ToolCallLog[]): SearchExecutionView | null {
+  const call = [...toolCalls].reverse().find((item) => item.tool === "search");
+  if (!call) return null;
+  try {
+    const payload = JSON.parse(call.result) as Record<string, unknown>;
+    const actualBackend = typeof payload.actual_backend === "string" ? payload.actual_backend.trim() : "";
+    if (!actualBackend) return null;
+    const requestedBackend = typeof payload.requested_backend === "string"
+      ? payload.requested_backend.trim()
+      : "";
+    const fallbackReason = typeof payload.fallback_reason === "string"
+      ? payload.fallback_reason.trim()
+      : "";
+    return {
+      requestedBackend: requestedBackend || actualBackend,
+      actualBackend,
+      fallbackReason: fallbackReason || null
+    };
+  } catch {
+    return null;
+  }
 }
 
 function mergeSources(parsed: SourceItem[], stored: ResearchRunSource[]): SourceItem[] {

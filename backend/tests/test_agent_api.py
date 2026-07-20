@@ -117,10 +117,15 @@ def test_agent_stream_preserves_frontend_event_protocol(monkeypatch):
 
     assert "todo_list" in event_types
     assert "sources" in event_types
+    assert "search_backend" in event_types
     assert "task_summary_chunk" in event_types
     assert "task_status" in event_types
     assert "final_report" in event_types
     assert event_types[-1] == "done"
+
+    search_event = next(event for event in events if event["type"] == "search_backend")
+    assert search_event["actual_backend"] == "duckduckgo"
+    assert search_event["fallback_reason"] is None
 
 
 def test_agent_stream_emits_langgraph_workflow_nodes(monkeypatch):

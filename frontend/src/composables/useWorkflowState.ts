@@ -299,7 +299,8 @@ export function useWorkflowState() {
           notices: [],
           noteId: extractOptionalString(item.note_id),
           notePath: extractOptionalString(item.note_path),
-          toolCalls: []
+          toolCalls: [],
+          searchExecution: null
         };
       });
       activeTaskId.value = todoTasks.value[0]?.id ?? null;
@@ -347,6 +348,23 @@ export function useWorkflowState() {
       }
       if (typeof payload.backend === "string") addLog(`当前使用搜索后端：${payload.backend}`);
       applyNoteMetadata(task, payload);
+      return;
+    }
+    if (event.type === "search_backend") {
+      const task = findTask(payload.task_id);
+      if (!task) return;
+      const actualBackend = extractOptionalString(payload.actual_backend);
+      if (!actualBackend) return;
+      task.searchExecution = {
+        requestedBackend: extractOptionalString(payload.requested_backend) ?? actualBackend,
+        actualBackend,
+        fallbackReason: extractOptionalString(payload.fallback_reason)
+      };
+      addLog(
+        task.searchExecution.fallbackReason
+          ? `实际使用搜索后端：${actualBackend}（已降级）`
+          : `实际使用搜索后端：${actualBackend}`
+      );
       return;
     }
     if (event.type === "task_summary_chunk") {

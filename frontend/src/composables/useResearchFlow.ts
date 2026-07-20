@@ -1,6 +1,6 @@
 import { computed, reactive, ref, type Ref } from "vue";
 
-import { runResearchStream, type ResearchStreamEvent } from "../services/api";
+import { getCapabilities, runResearchStream, type ResearchStreamEvent } from "../services/api";
 import type { SearchOptionItem } from "../types";
 
 interface WorkflowPort {
@@ -10,15 +10,6 @@ interface WorkflowPort {
   addLog: (message: string) => void;
 }
 
-const SEARCH_OPTIONS: SearchOptionItem[] = [
-  { value: "", label: "沿用后端配置", detail: "使用后端 .env 中的默认搜索引擎配置。" },
-  { value: "advanced", label: "advanced", detail: "混合多个搜索引擎，返回结构化 JSON；适合需要全面结果的研究。" },
-  { value: "duckduckgo", label: "duckduckgo", detail: "无需 API 密钥，免费且无需注册；适合快速体验。" },
-  { value: "tavily", label: "tavily", detail: "需要 API 密钥，专为 AI 检索设计；适合生产环境。" },
-  { value: "perplexity", label: "perplexity", detail: "需要 API 密钥，返回 AI 总结和来源。" },
-  { value: "searxng", label: "searxng", detail: "自建后无需 API 密钥，开源可控。" }
-];
-
 export function useResearchFlow(workflow: WorkflowPort) {
   const form = reactive({ topic: "", searchApi: "" });
   const loading = ref(false);
@@ -26,10 +17,44 @@ export function useResearchFlow(workflow: WorkflowPort) {
   const isExpanded = ref(false);
   const searchMenuOpen = ref(false);
   const researchDocumentCount = ref(0);
+  const searchOptionItems = ref<SearchOptionItem[]>([]);
+  const capabilitiesLoading = ref(false);
   let controller: AbortController | null = null;
 
-  const searchOptionItems = SEARCH_OPTIONS;
-  const selectedSearchLabel = computed(() => SEARCH_OPTIONS.find((item) => item.value === form.searchApi)?.label ?? "沿用后端配置");
+  const selectedSearchLabel = computed(() => {
+    if (capabilitiesLoading.value) return "正在读取可用搜索引擎…";
+    return searchOptionItems.value.find((item) => item.value === form.searchApi)?.label
+      ?? "暂时无法读取搜索能力";
+  });
+
+  async function loadCapabilities(): Promise<void> {
+    capabilitiesLoading.value = true;
+    try {
+      const payload = await getCapabilities();
+      const options: SearchOptionItem[] = payload.search.engines.map((engine) => ({
+        value: engine.id,
+        label: engine.label,
+        detail: engine.description
+      }));
+      if (payload.search.default_available) {
+        options.unshift({
+          value: "",
+          label: `沿用后端配置（${payload.search.default_engine}）`,
+          detail: `使用后端当前默认的 ${payload.search.default_engine} 搜索。`
+        });
+      }
+      searchOptionItems.value = options;
+      if (!options.some((item) => item.value === form.searchApi)) {
+        form.searchApi = options[0]?.value ?? "";
+      }
+      if (options.length) error.value = "";
+    } catch (caught) {
+      searchOptionItems.value = [];
+      error.value = caught instanceof Error ? caught.message : "无法读取可用搜索引擎";
+    } finally {
+      capabilitiesLoading.value = false;
+    }
+  }
 
   function selectSearchApi(value: string): void {
     form.searchApi = value;
@@ -40,6 +65,16 @@ export function useResearchFlow(workflow: WorkflowPort) {
     if (!form.topic.trim()) {
       error.value = "请输入研究主题";
       return;
+    }
+    if (!searchOptionItems.value.length) {
+      await loadCapabilities();
+      if (!searchOptionItems.value.length) {
+        error.value = error.value || "当前没有可用的搜索引擎";
+        return;
+      }
+    }
+    if (!searchOptionItems.value.some((item) => item.value === form.searchApi)) {
+      form.searchApi = searchOptionItems.value[0].value;
     }
     controller?.abort();
     researchDocumentCount.value = documentCount;
@@ -90,7 +125,7 @@ export function useResearchFlow(workflow: WorkflowPort) {
     workflow.reset();
     isExpanded.value = false;
     form.topic = "";
-    form.searchApi = "";
+    form.searchApi = searchOptionItems.value[0]?.value ?? "";
     error.value = "";
   }
 
@@ -109,7 +144,8 @@ export function useResearchFlow(workflow: WorkflowPort) {
 
   return {
     form, loading, error, isExpanded, searchMenuOpen, researchDocumentCount,
-    searchOptionItems, selectedSearchLabel, selectSearchApi, handleSubmit,
+    searchOptionItems, capabilitiesLoading, selectedSearchLabel, loadCapabilities,
+    selectSearchApi, handleSubmit,
     cancelResearch, goBack, startNewResearch, restoreContext, dispose
   };
 }

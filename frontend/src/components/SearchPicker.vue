@@ -5,6 +5,7 @@
       type="button"
       class="search-select-button"
       :class="{ open }"
+      :disabled="options.length === 0"
       @click="$emit('update:open', !open)"
     >
       <span>{{ selectedLabel }}</span>

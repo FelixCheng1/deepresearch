@@ -26,15 +26,18 @@
           type="button"
           class="document-item-button"
           :class="{ active: selectedDocumentId === document.id }"
+          :aria-expanded="selectedDocumentId === document.id"
+          aria-controls="document-detail-panel"
           @click="$emit('select', document.id)"
         >
           <span class="document-name" :title="document.filename">{{ document.filename }}</span>
           <span class="document-meta" :class="document.status">{{ documentStatusText(document) }}</span>
+          <span class="document-toggle-mark" aria-hidden="true">⌄</span>
         </button>
       </li>
     </ul>
 
-    <section v-if="selectedDocumentId" class="document-detail-panel">
+    <section v-if="selectedDocumentId" id="document-detail-panel" class="document-detail-panel">
       <template v-if="documentDetailLoading">
         <p class="document-empty">正在读取文档详情...</p>
       </template>
